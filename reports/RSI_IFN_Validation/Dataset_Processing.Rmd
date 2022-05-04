@@ -1,0 +1,201 @@
+---
+# The report title block contains all of this information, although
+# if they are missing they are excluded. Note that running_title is not
+# included, but is part of the header of the rest of the report.
+title: "Title of the Report"
+running_title: ""
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+project: ""
+srpt_number:
+version: 1.0
+investigators:
+  - name: ""
+  - name: ""
+project_team:
+analysis_contact:
+report_author: ""
+analysis_team:
+organization: "MCC Biostatistics & Bioinformatics"
+
+# A banner will run across the top page. For template packages,
+# you can use dsreportr::banner("mcctemplates::bbsr_pdf") or whatever
+# template string is used in the output block. Or name your own
+# image file. Note the width option allows the image to be stretched,
+# which may not be your intent.
+banner: "`r dsreportr::banner('mcctemplates::bbsr_pdf')`"
+banner_width: 5.5in
+
+# Output specific options. Note that this skeleton only really applies
+# to a specific template.
+output:
+  mcctemplates::bbsr_pdf:
+    latex_engine: pdflatex
+    keep_tex: false
+    
+# General settings for the report. Many of these settings are defaulted
+# and not always needed but can be overridden if desired.
+toc: yes
+toc_depth: 2
+number_sections: true
+fontsize: 11pt
+geometry:
+  - margin=1in
+  - top=1in
+  - bottom=1in
+  - footskip=0.5in
+  
+# This is a brief statement of the report purpose, etc that would be
+# available at the outset.
+abstract: 
+
+# These settings are extras, but I'm not sure they are valid.
+colorlinks: false
+urlcolor: "blue"
+linkcolor: "cyan"
+citecolor: "gray"
+toccolor: "cyan"
+
+---
+
+# RSI IFN Validation
+In the paper, it was observed that RSI and IFN (alpha and gamma pathways) were related. The question is if we can see this relationship in other public datasets, driven by the results of pan-cancer.
+
+I came up with the following tissue types to consider:
+
+- colon (colon400)
+- luad (DC)
+- ovca (Lancaster)
+- PRAD (maybe)
+- breast (if pam50 available).
+
+NOTE: The goal is to use the datasets as-is to compute the various values (IFN and RSI). Given the rank-based nature of RSI and the GSEA-style for IFN, this is likely to work fine.
+
+```{r setup}
+
+library(dplyr)
+
+datadir<-file.path(here::here(), "data.raw","public_datasets")
+crcdir<-file.path(datadir, "crc")
+luaddir<-file.path(datadir, "luad")
+brcadir<-file.path(datadir, "brca")
+hallmarks <- readRDS(file.path(here::here(), "data.raw","msigdb.v6.1.hallmarks.rds"))
+
+lkup_ifn <- which(hallmarks$geneset.names %in%
+                    c("HALLMARK_INTERFERON_ALPHA_RESPONSE","HALLMARK_INTERFERON_GAMMA_RESPONSE"))
+
+# There is probably a much easier way. But this gives us the necessary type for gsva/gsea.
+ifn_genesets <- GSEABase::GeneSetCollection(
+  sapply(lkup_ifn, function(x) {
+    GSEABase::GeneSet(hallmarks$genesets[[x]], setName = hallmarks$geneset.names[[x]],
+                    shortDescription = hallmarks$geneset.descriptions[[x]],
+                    geneIdType = GSEABase::SymbolIdentifier())
+  })
+)
+
+hilo_labels <- function(x) {
+  c("LO","HI")[as.numeric(x>median(x))+1]
+}
+
+```
+# Datasets
+
+## Colon CEL Files
+```{bash eval=FALSE}
+cd data.raw/public_datasets/crc
+wget "https://www.ncbi.nlm.nih.gov/geo/download/?acc=GSE14333&format=file" -O GSE14333.tar
+tar xf GSE14333.tar
+
+```
+
+RMA the data, calculate RSI and GSVA IFNA/G scores to put into the pdata.
+```{r}
+gse14333 <- affy::justRMA(celfile.path = crcdir)
+gse14333$rsi <- rsi::rsi(gse14333)
+gsva_results<-GSVA::gsva(gse14333, ifn_genesets, method="ssgsea", parallel.sz=5, verbose=TRUE)
+
+pData(gse14333) <- cbind(pData(gse14333), t(Biobase::exprs(gsva_results)))
+
+# Label with hi/lo
+gse14333$rsi_hilo <- hilo_labels(gse14333$rsi)
+
+
+saveRDS(gse14333, file = file.path(here::here(), "data.derived","gse14333.rds"))
+```
+
+
+## LUAD CEL Files
+```{bash eval=FALSE}
+cd data.raw/public_datasets/luad
+wget "https://www.ncbi.nlm.nih.gov/geo/download/?acc=GSE68465&format=file" -O GSE68465.tar
+tar xf GSE68465.tar
+```
+RMA the data, calculate RSI and GSVA IFNA/G scores to put into the pdata.
+```{r}
+gse68465 <- affy::justRMA(celfile.path = luaddir)
+gse68465$rsi <- rsi::rsi.matrix(Biobase::exprs(gse68465), annotation="hgu133plus2")
+gse68465$rsi_hilo <- hilo_labels(gse68465$rsi)
+
+gsva_results<-GSVA::gsva(gse68465, ifn_genesets, method="ssgsea", parallel.sz=5, verbose=TRUE)
+pData(gse68465) <- cbind(pData(gse68465), t(Biobase::exprs(gsva_results)))
+
+pData(gse68465) <- cbind(pData(gse68465), t(Biobase::exprs(biomarkerLibrary::runEstimate(gse68465))))
+
+
+saveRDS(gse68465, file = file.path(here::here(), "data.derived","gse68465.rds"))
+```
+
+## Breast CEL Files
+```{bash eval=FALSE}
+cd data.raw/public_datasets/brca
+wget "https://www.ncbi.nlm.nih.gov/geo/download/?acc=GSE1456&format=file" -O GSE1456.tar
+tar xf GSE1456.tar
+zgrep -l "U133A" *.CEL.gz > u133a_celfiles.txt
+```
+
+GSM107232.CEL.gz
+
+```{r}
+celfiles<-scan(file.path(brcadir, "u133a_celfiles.txt"), what=c(""))
+
+gse1456 <- affy::justRMA(filenames = celfiles, celfile.path = brcadir)
+gse1456$rsi <- rsi::rsi.matrix(Biobase::exprs(gse1456), annotation="hgu133plus2")
+gse1456$rsi_hilo <- hilo_labels(gse1456$rsi)
+
+gsva_results<-GSVA::gsva(gse1456, ifn_genesets, method="ssgsea", parallel.sz=5, verbose=TRUE)
+pData(gse1456) <- cbind(pData(gse1456), t(Biobase::exprs(gsva_results)))
+
+library(genefu)
+data(pam50.robust)
+
+# Why is the hardest part of bioinformatics gene mapping?
+gene_annot <- dplyr::inner_join(
+  tibble::enframe(unlist(as.list(hgu133aENTREZID)), value = "EntrezGene.ID",name="probe"),
+  tibble::enframe(unlist(as.list(hgu133aSYMBOL)), value="Gene.Symbol", name="probe"),
+  by="probe"
+) %>%
+  dplyr::mutate(rownames = probe) %>%
+  data.frame(row.names = "rownames")
+  
+# Data to genefu needs to be transposed (samples in rows, genes in columns).
+gse1456$pam50<-(genefu::molecular.subtyping(sbt.model = "pam50",data=t(Biobase::exprs(gse1456)),
+                                        annot=gene_annot,do.mapping=TRUE))$subtype
+  
+pData(gse1456) <- cbind(pData(gse1456), t(Biobase::exprs(biomarkerLibrary::runEstimate(gse1456))))
+
+
+
+saveRDS(gse1456, file = file.path(here::here(), "data.derived","gse1456.rds"))
+```
+
+<!---
+ATTENTION: The below text should remain at the bottom of your markdown
+as it provides tables about the runtime environment. You should leave
+everything from the start of this paragraph down at the end of the 
+document.
+--->
+\newpage
+# Session Information
+The information in this section is included in the report to facilitate reproducible research. The specific environment under which the code was run is detailed. 
+```{r session-information, echo=FALSE, results='asis'}
+dsreportr::print_session_information()
+```

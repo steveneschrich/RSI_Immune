@@ -1,0 +1,62 @@
+---
+title: "Project RSI_Immune: Hallmark_Immune_Lung_Cohort"
+shorttitle: "RSI_Immune"
+project: 
+srpt_number: 
+version: "`r CosmosReportTemplates::git_tag()`"
+author: 'Steven Eschrich'
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+investigators:
+  - name: "Daniel Grass"
+  - name: "Javier Torres-Roca"
+project_team:
+analysis_team:
+analysis_contact:
+organization: 
+output:
+  CosmosReportTemplates::bbsr_article_pdf: default
+  word_document: default
+  pdf_document: default
+  html_document: default
+toc: yes
+---
+
+```{r setup}
+library(knitr)
+library(readxl)
+
+library(readr)
+library(tibble)
+library(GSEABase)
+library(GSVA)
+library(dplyr)
+
+```
+
+
+Load the data: hallmarks signatures and metadata.
+```{r load_data}
+gsva_results<-readRDS("../../data.derived/gsva_results.RDS")
+
+result_table<-readRDS(file="../../data.derived/result_table.RDS")
+graph_config<-read_excel("../../data.raw/Graph_Colors_Shapes.xlsx")
+hallmark_categories<-read_excel("../../data.raw/Hallmark_Signature_Categories.xlsx") %>%
+        mutate(`Hallmark Name`=toupper(`Hallmark Name`)) %>%
+        arrange(`Hallmark Name`)
+immune_hallmarks<-c(hallmark_categories %>% filter(`Process Category`=="immune") %>% pull(`Hallmark Name`))
+rownames(gsva_results)<-sub("HALLMARK_","",rownames(gsva_results))
+
+lung_cohort<-read_excel("../../data.raw/Heiko_Lung_Cohort.xlsx")
+```
+
+
+
+Extract the hallmarks for the lung cohort and the immune-related hallmarks.
+```{r}
+pid<-lung_cohort$`Patient ID`[which(lung_cohort$`Patient ID` %in% colnames(gsva_results))]
+gsva_lung<-gsva_results[immune_hallmarks,pid]
+```
+
+```{r}
+write.table(gsva_lung,file="ssGSEA_lung_cohort.txt", col.names=NA, sep="\t", quote=FALSE)
+```

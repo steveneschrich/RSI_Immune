@@ -1,0 +1,65 @@
+---
+title: "Project RSI_Immune: Data Analysis Overview"
+shorttitle: "RSI_Immune"
+project: 
+srpt_number: 
+version: "`r CosmosReportTemplates::git_tag()`"
+author: 'Steven Eschrich'
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+investigators:
+  - name: "Daniel Grass"
+  - name: "Javier Torres-Roca"
+project_team:
+analysis_team:
+analysis_contact:
+organization: 
+output:
+  CosmosReportTemplates::bbsr_article_pdf: default
+  word_document: default
+  pdf_document: default
+  html_document: default
+toc: yes
+---
+
+
+# Overview
+The goal of this document is to provide an overview of the different analysis steps that contributed to the final results of this study.
+
+# Source data
+The following data was the basis for the analysis:
+
+```
+data.raw/tcc_v2_20327_debatched_sample_col_probeset_row.txt
+data.raw/hursta_annotation.txt
+```
+
+# Preparing data
+In this study, we generated Estimate scores, CIBERSORT scores and ssGSEA signature scores. These are used in subsequent analyses but are documented here as discrete steps.
+
+## Estimate Calculations
+
+The calculations were performed in 
+```
+reports/Estimate_Algorithm
+```
+
+Analysis of these results (relative to existing pathology QC data) was performed in 
+```
+reports/Estimate_Algorithm_Analysis
+```
+
+## CIBERSORT Calculations
+
+The calculations were performed in 
+```
+reports/CIBERSORT_Algorithm
+```
+
+# Figures
+See the file
+```Figure_List.txt``` for a list of figures and the source R script that generates it.
+
+
+```{r session.info.table,results='asis',echo=FALSE}
+CosmosReportTemplates::print_session_information()
+```

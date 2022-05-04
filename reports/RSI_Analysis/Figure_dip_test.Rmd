@@ -1,0 +1,181 @@
+---
+title: "RSI Bimodal Distributions"
+shorttitle: "RSI Bimodal Distributions"
+project: "RSI-Immune Project"
+srpt_number: 000
+version: "`r system2('git',args=c('tag','--points-at'),stdout=TRUE)`"
+author: ''
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+investigators:
+  - name: "Daniel Grass"
+  - name: ""
+project_team:
+analysis_team:
+analysis_contact:
+organization: "MCC BBSR"
+output:
+  CosmosReportTemplates::bbsr_pdf: default
+  word_document: default
+  pdf_document: default
+  html_document: default
+toc: yes
+---
+
+
+
+
+```{r setup}
+suppressPackageStartupMessages({
+  library(readxl)
+  library(ggplot2)
+  library(knitr)
+  library(tibble)
+  library(dplyr)
+  library(diptest)
+  library(ggsci)
+  library(ggpubr)
+  library(grid)
+})
+
+```
+
+The first step is to load the RSI data (and tissue metadata).
+```{r}
+result.table<-readRDS("../../data.derived/result_table.RDS")
+
+graph_data<-read_excel("../../data.raw/Graph_Colors_Shapes.xlsx")
+graph_labels<-data.frame(as.character(graph_data$tissue_abbreviations),row.names=graph_data$tissue_abbreviations)
+graph_colors<-data.frame(as.character(graph_data$color), row.names=graph_data$tissue_abbreviations)
+
+result.table<-as_tibble(result.table) %>% left_join(select(graph_data,c("SOO_Merged","tissue_abbreviations")), by=c("SOO_Merged"="SOO_Merged"))
+
+dip.results<-list()
+```
+
+
+
+
+Using the diptest, it suggests that the distribution is not unimodal.
+```{r}
+all.rsi.dip<-dip.test(result.table$RSI)
+print(all.rsi.dip)
+dip.results[["All Samples"]]<-all.rsi.dip
+```
+
+Tissue Types
+===
+Looking at tissue types, we can test each for unimodality.
+
+First, the counts of tissue types:
+```{r}
+result.table %>%
+  group_by(SOO_Merged) %>%
+  summarize(count=n()) %>%
+  arrange(desc(count)) %>%
+  kable(caption="Counts of Site of Origin")
+```
+
+Next, iterate over tissue types and test for unimodal distributions.
+```{r}
+for (tissue in levels(as.factor(result.table$tissue_abbreviations))) {
+  rsi.values<-result.table %>%
+    filter(tissue_abbreviations==tissue) %>%
+    select(RSI)
+  
+  dip.results[[tissue]]<-dip.test(rsi.values$RSI)
+}
+```
+
+Prepare a table summarizing tissue type results of the dip test.
+```{r}
+dip.summary<-as.data.frame(t(sapply(names(dip.results),
+                     function(y){
+                       c(dip.results[[y]]$statistic, dip.results[[y]]$p.value)
+                      })))
+colnames(dip.summary)<-c("Statistic","p value")
+rownames(dip.summary)<-c("All Samples",as.character(graph_labels[rownames(dip.summary)[2:nrow(dip.summary)],]))
+dip.summary<-dip.summary[order(dip.summary$`p value`),]
+
+kable(dip.summary,caption="dip test results for RSI vs. tissue type")
+write.table(dip.summary,"dip_summary_result.txt",quote=F,sep="\t",col.names=NA)
+```
+
+
+
+
+
+
+
+
+```{r}
+
+densityplot<-ggplot(result.table,aes(x=RSI)) + 
+  geom_density(alpha=0.1,color="black", fill="black") +
+  ggtitle("Overall RSI") +
+  theme_bw() +
+  xlim(c(0,1)) +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+
+
+pvalue_table_data<-data.frame("p value"=format.pval(dip.summary$`p value`,digits=1,eps=0.001),row.names=rownames(dip.summary))
+
+pvalue_table_1<-ggtexttable(pvalue_table_data[1:11,,drop=F], theme = ttheme(base_size=8))
+pvalue_table_2<-ggtexttable(pvalue_table_data[12:22,,drop=F], theme = ttheme(base_size=8))
+pvalue_table_3<-ggtexttable(pvalue_table_data[23:32,,drop=F], theme = ttheme(base_size=8))
+
+pdf(file="overall_rsi_density.pdf")
+ggarrange(densityplot, 
+          ggarrange(pvalue_table_1,pvalue_table_2,pvalue_table_3, ncol=3,nrow=1),
+          ncol=1,nrow=2)
+dev.off()
+
+
+individual_plots<-list()
+for (tissue in rownames(pvalue_table_data)) {
+  res<-NULL  
+  if (tissue=="All Samples") {
+      res<-ggplot(result.table %>% select("RSI"), aes(x=RSI)) +
+      ggtitle("All Samples") +
+      geom_density(alpha=0.1, fill="black")  +
+      geom_vline(xintercept = median(result.table$RSI) , colour = "black", linetype = "dashed") 
+    } else {
+      rsi_vals<-result.table %>% filter(tissue_abbreviations==tissue) %>% select("RSI")
+      res<-ggplot(rsi_vals, aes(x=RSI)) +
+      ggtitle(graph_labels[tissue,]) +
+      geom_density(fill=graph_colors[tissue,], linetype=0) +
+      geom_vline(xintercept = median(rsi_vals$RSI) , colour = "black", linetype = "dashed") 
+      #color=graph_colors[tissue,], 
+    }
+    res<-res +
+      
+      theme_bw() +
+      xlim(c(0,1)) +
+      theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+      xlab(sprintf("RSI (dip p %s)", pvalue_table_data[tissue,])) +
+      ylab("")
+  individual_plots[[tissue]]<-res
+}
+
+pdf(file="Figure_2B_dip_test_RSI.pdf",height=11, width=8.5)
+composite<-ggarrange(plotlist=individual_plots,ncol=5,nrow=8)
+annotate_figure(composite,
+               #top = text_grob("Visualizing len", color = "red", face = "bold", size = 14),
+                #bottom = text_grob("Data source: \n ToothGrowth data set", color = "blue",
+                 #                  hjust = 1, x = 1, face = "italic", size = 10),
+                left = text_grob("Density", rot = 90)
+                #right = "I'm done, thanks :-)!",
+               # fig.lab = "Figure 1", fig.lab.face = "bold"
+)
+#grid.text(x=unit(1,"in"),
+#          y=unit(0.3,"in"),
+#          "B"
+#)
+
+dev.off()
+
+```
+
+
+```{r session.info.table,results='asis',echo=FALSE}
+CosmosReportTemplates::print_session_information()
+```

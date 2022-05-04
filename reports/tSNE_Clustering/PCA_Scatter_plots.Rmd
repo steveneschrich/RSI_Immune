@@ -1,0 +1,54 @@
+---
+title: "Project RSI_Immune: PCA Scatter Plots"
+shorttitle: "RSI_Immune"
+project: 
+srpt_number: 
+version: "`r CosmosReportTemplates::git_tag()`"
+author: 'Steven Eschrich'
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+investigators:
+  - name: "Daniel Grass"
+  - name: "Javier Torres-Roca"
+project_team:
+analysis_team:
+analysis_contact:
+organization: 
+output:
+  CosmosReportTemplates::bbsr_article_pdf: default
+  word_document: default
+  pdf_document: default
+  html_document: default
+toc: yes
+---
+
+
+# Overview
+Since the PCA on the gene expression has been computed, we can project this directly and color by RSI and
+immune score.
+
+NB: This is not complete
+TODO: Finish this
+
+```{r setup}
+
+```
+
+```{r}
+pca<-readRDS(file="tcc_primary_pca.RDS")
+```
+
+
+Then we do the tSNE clustering with the PC's are a starting point.
+```{r}
+library(Rtsne)
+ts.100<-Rtsne(pca$scores,pca=FALSE,perplexity=100)
+# Important: make sure the Y matrix is annotated as to what samples are what.
+rownames(ts.100$Y)<-rownames(pca$scores)
+#saveRDS(ts.100,file="tsne-perplexity=100-clusters.RDS")
+```
+
+
+
+```{r session.info.table,results='asis',echo=FALSE}
+CosmosReportTemplates::print_session_information()
+```

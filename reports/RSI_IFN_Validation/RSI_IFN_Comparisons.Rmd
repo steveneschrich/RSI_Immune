@@ -1,0 +1,306 @@
+---
+title: "RSI and Interferon Response Signatures"
+running_title: "RSI and INF"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+project: ""
+srpt_number:
+version: 1.0
+investigators:
+  - name: "Daniel Grass"
+  - name: ""
+project_team:
+analysis_contact:
+report_author: "Steven Eschrich"
+analysis_team:
+organization: "MCC Biostatistics & Bioinformatics"
+# you can use dsreportr::banner("mcctemplates::bbsr_pdf") or whatever
+banner: "`r dsreportr::banner('mcctemplates::bbsr_pdf')`"
+banner_width: 5.5in
+output:
+  bookdown::pdf_document2: default
+    
+  mcctemplates::bbsr_pdf:
+    latex_engine: pdflatex
+    keep_tex: false
+toc: yes
+toc_depth: 2
+number_sections: true
+fontsize: 11pt
+geometry:
+  - margin=1in
+  - top=1in
+  - bottom=1in
+  - footskip=0.5in
+abstract: 
+colorlinks: false
+urlcolor: "blue"
+linkcolor: "cyan"
+citecolor: "gray"
+toccolor: "cyan"
+---
+
+# Validation of the RSI/IFN relationship
+In Grass, et al, it was observed in the TCC cohort (10k primaries) that RSI differed in IFNalpha and IFNgamma hallmark signatures. We investigated this phenomenon further in three large, publicly available gene expression cohorts to validate this relationship.
+
+For each dataset, the raw expression data was downloaded from GEO and processed/normalized in R using the affy Bioconductor package (rma). RSI was calculated from the expression data, and the GSVA package (ssGSEA option) was used to estimate hallmark gene set activity in each sample. In the breast cancer dataset (), the Bioconductor package genefu was used to estimate PAM50 subtypes. 
+
+The datasets included
+
+- gse14333: Colon/colorectal cancer (N=)
+- gse68465: Lung adenocarcinoma (N=)
+- gse1456: Breast cancer (N=)
+
+
+```{r setup}
+
+library(ggplot2)
+library(ggpubr)
+library(ggsci)
+
+datadir<-file.path(here::here(), "data.derived")
+
+gse1456 <-readRDS(file.path(datadir, "gse1456.rds"))
+gse68465<-readRDS(file.path(datadir, "gse68465.rds"))
+gse14333<-readRDS(file.path(datadir, "gse14333.rds"))
+
+
+
+
+```
+
+# GSE14333: COAD
+```{r fig.height=6, fig.width=6, eval=FALSE}
+ 
+df <- data.frame(RSI=gse14333$rsi, 
+                 `RSI Hi/Lo` = gse14333$rsi_hilo,
+                 `INTERFERON ALPHA`=gse14333$HALLMARK_INTERFERON_ALPHA_RESPONSE,
+                 `INTERFERON GAMMA`=gse14333$HALLMARK_INTERFERON_GAMMA_RESPONSE,
+                 check.names=F)
+
+ggscatter(df,
+          x="RSI", y="INTERFERON ALPHA", color="black", fill="red",size=5, shape=21, cor.coef=TRUE,
+          add="reg.line",
+          main = "GSE14333: Colon Adenocarcinoma"
+)
+
+ggscatter(df,
+          x="RSI", y="INTERFERON GAMMA", color="black", fill="red",size=5, shape=21, cor.coef=TRUE,
+          add="reg.line",
+          main = "GSE143333: Colon Adenocarcinoma"
+)
+
+ggboxplot(df, x = "RSI Hi/Lo", y = "INTERFERON ALPHA",
+          fill="RSI Hi/Lo",
+          main = "GSE143333: Colon Adenocarcinoma",
+          bxp.errorbar = TRUE,
+          palette = "jco",
+          add = "jitter",
+) + stat_compare_means()
+
+
+ggboxplot(df, x = "RSI Hi/Lo", y = "INTERFERON GAMMA",
+          fill="RSI Hi/Lo",
+          main = "GSE143333: Colon Adenocarcinoma",
+          bxp.errorbar = TRUE,
+          palette = "jco",
+          add = "jitter",
+) + stat_compare_means()
+
+```
+# GSE68465: LUAD
+```{r fig.height=6, fig.width=6}
+
+luad_df <- data.frame(RSI=gse68465$rsi, 
+                 `RSI Hi/Lo` = factor(gse68465$rsi_hilo,levels=c("LO","HI")),
+                 `INTERFERON ALPHA`=gse68465$HALLMARK_INTERFERON_ALPHA_RESPONSE,
+                 `INTERFERON GAMMA`=gse68465$HALLMARK_INTERFERON_GAMMA_RESPONSE,
+                 `IMMUNE SCORE` = gse68465$ImmuneScore,
+                 check.names=F)
+
+luad_dfl <- luad_df %>%
+  tidyr::pivot_longer(cols = c("INTERFERON ALPHA", "INTERFERON GAMMA", "IMMUNE SCORE"), 
+                      names_to = "ScoreName", values_to="Score")
+```
+
+```{r eval=FALSE}
+ggscatter(luad_df,
+          x="RSI", y="INTERFERON ALPHA", color="black", fill="red",size=5, shape=21, cor.coef=TRUE,
+          add="reg.line",
+          main = "GSE68465: Lung Adenocarcinoma"
+)
+
+ggscatter(luad_df,
+          x="RSI", y="INTERFERON GAMMA", color="black", fill="red",size=5, shape=21, cor.coef=TRUE,
+          add="reg.line",
+          main = "GSE68465: Lung Adenocarcinoma"
+)
+
+ggboxplot(luad_df, x = "RSI Hi/Lo", y = "INTERFERON ALPHA",
+          fill="RSI Hi/Lo",
+          main = "GSE68465: Lung Adenocarcinoma",
+          bxp.errorbar = TRUE,
+          palette = "jco",
+          add = "jitter",
+) + stat_compare_means()
+
+
+ggboxplot(luad_df, x = "RSI Hi/Lo", y = "INTERFERON GAMMA",
+          fill="RSI Hi/Lo",
+          main = "GSE68465: Lung Adenocarcinoma",
+          bxp.errorbar = TRUE,
+          palette = "jco",
+          add = "jitter",
+) + stat_compare_means()
+
+
+
+
+
+luad_bp <- ggboxplot(luad_dfl, x = "RSI Hi/Lo", y = "Score",
+          fill="RSI Hi/Lo",
+          main = "GSE68465: Lung Adenocarcinoma",
+          bxp.errorbar = TRUE,
+          palette = "jco",
+          add = "jitter",
+          facet.by = "ScoreName",
+          scales = "free",
+          cex=0.5
+) + stat_compare_means()
+
+```
+
+
+```{r}
+
+luad_plot<-ggplot(luad_dfl, aes(x=`RSI Hi/Lo`, y= `Score`, fill = `RSI Hi/Lo`)) +
+  stat_boxplot(geom ='errorbar',  width=0.4) + 
+  geom_boxplot(outlier.shape=NA) +
+  geom_jitter(width=0.2,show.legend = FALSE) +
+  facet_wrap( facets =  vars(ScoreName), scales="free",  strip.position="top") +
+  # The ggpubr theme is a good start for styling.
+  theme_pubr(base_size=10) +
+  # Use JCO colors
+  scale_fill_jco() +
+scale_y_continuous(expand = expansion(mult = c(0.05, .15))) +
+  theme(panel.border = element_rect(fill=NA), axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(), axis.title.y = element_blank()) +
+  stat_compare_means(vjust=-1) +
+  ggtitle("GSE68465: Lung Adenocarcinoma")
+
+#ggsave(luad_bp, file = "luad_boxplot.pdf", height=6, width =8)
+
+```
+
+# GSE1456: BRCA
+```{r fig.height=6, fig.width=6}
+
+brca_df <- data.frame(RSI=gse1456$rsi, 
+                 `RSI Hi/Lo` = factor(gse1456$rsi_hilo,levels=c("LO","HI")),
+                 `INTERFERON ALPHA`=gse1456$HALLMARK_INTERFERON_ALPHA_RESPONSE,
+                 `INTERFERON GAMMA`=gse1456$HALLMARK_INTERFERON_GAMMA_RESPONSE,
+                 PAM50 = gse1456$pam50,
+                 `IMMUNE SCORE` =gse1456$ImmuneScore,
+                 check.names=F)
+
+brca_dfl <- brca_df %>%
+  tidyr::pivot_longer(cols = c("INTERFERON ALPHA", "INTERFERON GAMMA", "IMMUNE SCORE"), 
+                      names_to = "ScoreName", values_to="Score")
+```
+
+```{r eval=FALSE}
+
+ggscatter(brca_df,
+          x="RSI", y="INTERFERON ALPHA", color="black", fill="PAM50",size=5, shape=21, cor.coef=TRUE,
+          add="reg.line",
+          main = "GSE1456: BRCA"
+)
+
+ggscatter(brca_df,
+          x="RSI", y="INTERFERON GAMMA", color="black", fill="PAM50",size=5, shape=21, cor.coef=TRUE,
+          add="reg.line",
+          main = "GSE1456: BRCA"
+)
+
+```
+
+```{r fig.height=8, fig.width=6, eval=FALSE}
+ggboxplot(brca_df, x = "RSI Hi/Lo", y = "INTERFERON ALPHA",
+          fill="RSI Hi/Lo",
+          main = "GSE1456: BRCA",
+          bxp.errorbar = TRUE,
+          palette = "jco",
+          facet.by = "PAM50",
+          add = "jitter"
+          
+) + stat_compare_means()
+
+
+ggboxplot(brca_df, x = "RSI Hi/Lo", y = "INTERFERON GAMMA",
+          fill="RSI Hi/Lo",
+          main = "GSE1456: BRCA",
+          bxp.errorbar = TRUE,
+          palette = "jco",
+          add = "jitter",
+          facet.by = "PAM50"
+) + stat_compare_means()
+
+```
+
+```{r}
+
+brca_plot<-ggplot(brca_dfl, aes(x=`RSI Hi/Lo`, y= `Score`, fill = `RSI Hi/Lo`)) +
+  stat_boxplot(geom ='errorbar',  width=0.4) + 
+  geom_boxplot(outlier.shape=NA) +
+  geom_jitter(width=0.2,show.legend = FALSE) +
+  facet_grid(cols = vars(PAM50),  rows =  vars(ScoreName), scales="free",  switch="y") +
+  # The ggpubr theme is a good start for styling.
+  theme_pubr(base_size=10) +
+  # Use JCO colors
+  scale_fill_jco() +
+scale_y_continuous(expand = expansion(mult = c(0.05, .15))) +
+  theme(panel.border = element_rect(fill=NA), axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(), axis.title.y = element_blank()) +
+  stat_compare_means(vjust=-1, size=3) +
+  ggtitle("GSE1456: BRCA")
+
+#,
+        #text=element_text(size=8)
+
+
+```
+
+```{r eval=FALSE}
+ggboxplot(dfl, x = "RSI Hi/Lo", y = "Score",
+          fill="RSI Hi/Lo",
+          main = "GSE1456: BRCA",
+          bxp.errorbar = TRUE,
+          palette = "jco",
+          add = "jitter",
+          scales = "free",
+          space = "free",
+          facet.by = c("PAM50","ScoreName")
+) + stat_compare_means()
+
+```
+
+# Supplemental Figure 4
+
+```{r}
+sup_fig_4<-ggpubr::ggarrange(brca_plot, luad_plot, ncol=1, nrow=2, 
+                             labels="AUTO",  heights=c(2,1),
+                             common.legend = TRUE)
+ggsave(sup_fig_4, filename="Figure_S4_RSI_IFN_Comparisons.pdf", width=7,  height=10)
+```
+
+<!---
+ATTENTION: The below text should remain at the bottom of your markdown
+as it provides tables about the runtime environment. You should leave
+everything from the start of this paragraph down at the end of the 
+document.
+--->
+\newpage
+# Session Information
+The information in this section is included in the report to facilitate reproducible research. The specific environment under which the code was run is detailed. 
+```{r session-information, echo=FALSE, results='asis'}
+dsreportr::print_session_information()
+```

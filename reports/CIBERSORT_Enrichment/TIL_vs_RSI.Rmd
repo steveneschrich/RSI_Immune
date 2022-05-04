@@ -1,0 +1,158 @@
+---
+# The report title block contains all of this information, although
+# if they are missing they are excluded. Note that running_title is not
+# included, but is part of the header of the rest of the report.
+title: "Title of the Report"
+running_title: ""
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+project: ""
+srpt_number:
+version: 1.0
+investigators:
+  - name: ""
+  - name: ""
+project_team:
+analysis_contact:
+report_author: ""
+analysis_team:
+organization: "MCC Biostatistics & Bioinformatics"
+
+# A banner will run across the top page. For template packages,
+# you can use dsreportr::banner("mcctemplates::bbsr_pdf") or whatever
+# template string is used in the output block. Or name your own
+# image file. Note the width option allows the image to be stretched,
+# which may not be your intent.
+banner: "`r dsreportr::banner('mcctemplates::bbsr_pdf')`"
+banner_width: 5.5in
+
+# Output specific options. Note that this skeleton only really applies
+# to a specific template.
+output:
+  mcctemplates::bbsr_pdf:
+    latex_engine: pdflatex
+    keep_tex: false
+    
+# General settings for the report. Many of these settings are defaulted
+# and not always needed but can be overridden if desired.
+toc: yes
+toc_depth: 2
+number_sections: true
+fontsize: 11pt
+geometry:
+  - margin=1in
+  - top=1in
+  - bottom=1in
+  - footskip=0.5in
+  
+# This is a brief statement of the report purpose, etc that would be
+# available at the outset.
+abstract: 
+
+# These settings are extras, but I'm not sure they are valid.
+colorlinks: false
+urlcolor: "blue"
+linkcolor: "cyan"
+citecolor: "gray"
+toccolor: "cyan"
+
+---
+
+# Overview
+The goal of this report is to generate summary figures/tables of significant TIL estimates vs. RSI hi/lo conditions by disease. Not all TIL/RSI/Disease combinations are significant but can be listed in a table. A figure can demonstrate a few key, significant, relationships.
+
+
+```{r setup}
+library(magrittr)
+library(ggplot2)
+library(ggpubr)
+library(ggsci)
+
+wd <- here::here("reports/CIBERSORT_Enrichment")
+# Merge results.
+graph_config<-readxl::read_excel(here::here("data.raw","Graph_Colors_Shapes.xlsx"))
+
+result_table<-readRDS(here::here("data.derived","result_table.RDS")) %>%
+  tibble::as_tibble(rownames="BARCODE") %>%
+  dplyr::filter(!is.na(SOO_Merged)) %>%
+  dplyr::mutate(RSI_Category_Merged = ifelse(RSI_Category_Merged=="LOW","LO",RSI_Category_Merged)) %>%
+  dplyr::mutate(RSI_Category_Merged = factor(RSI_Category_Merged, levels = c("LO","HI"))) %>%
+  dplyr::left_join(graph_config %>% dplyr::select(SOO_Merged, tissue_abbreviations), by="SOO_Merged")
+
+
+cell_types<-readRDS(file=here::here("data.derived","config_immune_cell_types.rds"))
+
+```
+
+NCA
+
+The goal is to pull out the three most highly correlated tissue types (HNSC, BC_BASAL, MEL) for three
+immune types (NK+, CD8, M1) and plot these relative to RSI.
+
+```{r}
+hnsc <- result_table %>%
+  dplyr::filter(tissue_abbreviations == "HNSC")
+
+bc_basal <- result_table %>%
+  dplyr::filter(tissue_abbreviations == "BC_BASAL") 
+
+mel <- result_table %>%
+  dplyr::filter(tissue_abbreviations == "MEL")
+
+boxplot(hnsc$NK.cells.activated_NCA~hnsc$RSI_Category_Merged)
+```
+
+```{r}
+
+df <- result_table %>% 
+  tidyr::pivot_longer(cols = c("NK.cells.activated_NCA","Macrophages.M1_NCA","T.cells.CD8_NCA"), 
+                      names_to="TIL",
+                      values_to = "TIL_Estimate"
+  ) %>%
+  dplyr::filter(tissue_abbreviations %in% c("HNSC","BC_BASAL","MELA")) %>%
+  dplyr::left_join(cell_types, by=c("TIL"="CibersortNormalizedQuantification"))
+
+ggboxplot(df, 
+          x="RSI_Category_Merged", 
+          y=c("TIL_Estimate"), 
+          fill = "RSI_Category_Merged",
+          bxp.errorbar=TRUE, palette="jco",add="jitter",
+          facet.by = c("tissue_abbreviations","DisplayName"), scale = "free",
+          xlab = "RSI", ylab = cell_types %>% dplyr::filter(CibersortNormalizedQuantification=="NK.cells.activated_NCA") %>% dplyr::pull("DisplayName")) +
+  stat_compare_means(method="wilcox")
+
+
+
+g <-ggplot(df, aes(x=`RSI_Category_Merged`, y= `TIL_Estimate`, fill = `RSI_Category_Merged`)) +
+  stat_boxplot(geom ='errorbar',  width=0.4) + 
+  geom_boxplot(outlier.shape=NA) +
+  geom_jitter(width=0.2,show.legend = FALSE) +
+  guides(fill=guide_legend(title="RSI")) +
+  facet_grid(cols = vars(DisplayName),  rows =  vars(tissue_abbreviations), scales="free") +
+  # The ggpubr theme is a good start for styling.
+  theme_pubr(base_size=10) +
+  # Use JCO colors
+  scale_fill_jco() +
+scale_y_continuous(expand = expansion(mult = c(0.05, .15))) +
+  theme(panel.border = element_rect(fill=NA), axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(), axis.title.y = element_blank()) +
+  stat_compare_means(vjust=-1, size=3) +
+  ggtitle("RSI vs. Immune Cell Estimates") +
+  xlab("RSI")
+
+pdf("Figure_S3.pdf")
+g
+dev.off()
+```
+
+<!---
+ATTENTION: The below text should remain at the bottom of your markdown
+as it provides tables about the runtime environment. You should leave
+everything from the start of this paragraph down at the end of the 
+document.
+--->
+\newpage
+# Session Information
+The information in this section is included in the report to facilitate reproducible research. The specific environment under which the code was run is detailed. 
+```{r session-information, echo=FALSE, results='asis'}
+dsreportr::print_session_information()
+```

@@ -1,0 +1,169 @@
+---
+title: "Project RSI_Immune: PCA CIBERSORT Cell Types"
+shorttitle: "RSI_Immune"
+project: 
+srpt_number: 
+version: "`r CosmosReportTemplates::git_tag()`"
+author: 'Steven Eschrich'
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+investigators:
+  - name: "Daniel Grass"
+  - name: "Javier Torres-Roca"
+project_team:
+analysis_team:
+analysis_contact:
+organization: 
+output:
+  CosmosReportTemplates::bbsr_article_pdf: default
+  word_document: default
+  pdf_document: default
+  html_document: default
+toc: yes
+---
+
+
+# Overview
+The goal of this analysis is to generate a PCA of loadings for the CIBERSORT results.
+
+CIBERSORT is an algorithm for estimate immune cell fractions.
+
+
+```{r setup}
+library(ggplot2)
+library(ggrepel)
+library(ggpubr)
+library(ggsci)
+```
+
+
+```{r}
+
+cibersort<-readRDS(file="../../data.derived/cibersort_scores_rel.RDS")
+colnames(cibersort)<-sub("_REL$","",colnames(cibersort))
+cibersort<-cibersort[,1:22]
+cell_type_mapping<-read.table(file="../../data.raw/cell_type_map.txt",row.names=1,header=T,stringsAsFactors = FALSE,sep="\t",quote="")
+
+
+# Read in the cell type classifications. Originally, Suppressors were called Pro-tumor and
+# Effectors were called Anti-tumor. Note that we are talking about "Immune Suppressors" and
+# "Immune Effectors", which would correspond to pro-tumor (reducing the impact of an immune response,
+# which is presumed to be a benefit to the tumors).
+cell_type_classification<-read.table(file="../../data.raw/CellTypeClassification.txt",
+                                     header=T,row.names=1,stringsAsFactors = FALSE) %>%   
+  mutate(`CellEffect`=dplyr::recode(`CellEffect`, 
+                           "Pro-tumor"="Suppressor", 
+                           "Anti-tumor"="Effector"))
+
+cell_type_labels<-readxl::read_excel("PCA_CIBERSORT_CellTypes_Coordinate_Labels.xlsx")
+```
+
+```{r}
+pca<-prcomp(cibersort,scale.=T)
+var<-100*(pca$sdev^2/sum(pca$sdev^2))
+```
+
+```{r}
+
+# Graphing configuration
+# We want the graph to show Suppressors first in the legend (since they will show on the
+# left in the PCA). So we order the factor accordingly.
+cell_type_classification$effect<-factor(cell_type_classification$CellEffect, 
+                                      levels=c("Suppressor","Effector"))
+
+# Use the NPG palette for red/blue colors (first two in the palette).
+effector_red<-pal_npg()(2)[1]
+suppressor_blue<-pal_npg()(2)[2]
+# The legend label is spaced further apart to look nicer, here padded with spaces.
+label_function<-function(breaks) {
+  label_map<-c(
+    "Suppressor" = "Suppressor (S)",
+    "Effector" = "Effector (E)"
+  )
+  label_map[breaks]
+}
+
+# Size of things
+# The figures keep getting resized, so we include the variables here to tweak.
+## Figure dimension is assumed square, dimensions in inches
+fig_dim<-2.6
+## Point size (the circles in the figure)
+point_size<-2
+## Label size
+label_size<-7
+## Graph text size
+text_size<-9
+## Axis text size
+axis_size<-6
+# The figure!
+cairo_pdf(file="Figure_2B_PCA_CIBERSORT.pdf",height=fig_dim,width=fig_dim)
+gdf<-tibble::tibble(cell=rownames(pca$rotation),
+                x=pca$rotation[,1],
+                y=pca$rotation[,2],
+                names=cell_type_mapping[rownames(pca$rotation),1],
+                Category=cell_type_classification[rownames(pca$rotation),"effect"],
+                ) %>%
+  dplyr::left_join(cell_type_labels, by=c("cell"="cell")) %>%
+  data.frame(row.names="cell")
+# NOTE: This text is too long for it's place, so we replace it with
+# one that includes a newline
+gdf["T.cells.CD4.naive","names"]<-"paste('Naïve\nCD4 T')"
+
+g<-ggplot(gdf,aes(x=x,y=y, fill=Category, label=names)) + 
+  geom_point(size=point_size, shape=21, color="black") +
+  theme_bw() +
+  # Commented this out in favor of explicit positioning per an external spreadsheet.
+  #geom_text_repel(aes(label=names),
+  #                point.padding=0,
+  #                parse=TRUE,
+  #                family="Arial Unicode MS", 
+  #                min.segment.length=1, size=label_size/.pt,
+  #                box.padding=.25,
+  #                max.time=15,
+  #                max.iter=10000000) +
+  geom_text(mapping=aes(x=label_x, y=label_y, label=names),
+            parse=TRUE,
+            family="Arial Unicode MS",
+            size=label_size/.pt,
+            lineheight=0.75) +
+  xlab(sprintf("PC1 (%3.1f%%)",var[1])) +
+  ylab(sprintf("PC2 (%3.1f%%)",var[2])) +
+  theme(text=element_text(size=text_size, family="Arial Unicode MS"), 
+       # Turn off a lot of decoration on the plot
+       legend.title = element_blank(),
+       panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+       panel.border = element_blank(),
+       # Change axis text to smaller size
+       axis.text.x = element_text(size=axis_size),
+       axis.text.y = element_text(size=axis_size),
+       legend.margin = margin(t=0,r=0,b=0,l=0,unit="pt"),
+       legend.box.margin = margin(t = 0, r = 0, b = 0, l = 0, unit = "pt"),
+       #legend.box.spacing = unit(1,unit="pt"),
+       
+       legend.spacing=unit(0,units="pt"),
+       # Carve out space for the legend at the top
+       plot.margin=unit(c(t=6,r=1,b=1,l=1),"mm"),
+       # Position the legend in the top left corner (assuming a 1x1 grid I think)
+       legend.position=c(.4,1.05),
+       axis.line = element_line(colour = "black"),
+       )+
+  guides(fill = guide_legend(nrow = 1)) +
+  # Assign colors and labels to the categories (blue=Suppressor, red=Effector)
+  scale_fill_manual(values=c("Suppressor"=suppressor_blue,"Effector"=effector_red),
+                    labels=label_function)
+
+
+print(g)
+#annotate_figure(g,
+#                bottom=text_grob(" ",face="bold",size=60),
+#                fig.lab="Supplemental Figure 7\n",
+#                fig.lab.pos="bottom.left"
+#                #fig.lab.face="bold",
+#                #fig.lab.size=18
+#                )
+
+dev.off()
+
+```
+```{r session.info.table,results='asis',echo=FALSE}
+CosmosReportTemplates::print_session_information()
+```

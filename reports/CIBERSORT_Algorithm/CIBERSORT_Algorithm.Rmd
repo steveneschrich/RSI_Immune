@@ -1,0 +1,122 @@
+---
+title: "Project RSI_Immune: CIBERSORT Algorithm"
+shorttitle: "RSI_Immune"
+project: 
+srpt_number: 
+version: "`r CosmosReportTemplates::git_tag()`"
+author: 'Steven Eschrich'
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+investigators:
+  - name: "Daniel Grass"
+  - name: "Javier Torres-Roca"
+project_team:
+analysis_team:
+analysis_contact:
+organization: 
+output:
+  CosmosReportTemplates::bbsr_article_pdf: default
+  word_document: default
+  pdf_document: default
+  html_document: default
+toc: yes
+---
+
+
+# Overview
+The goal of this analysis is to generate the CIBERSORT scores for the TCC cohort. 
+
+CIBERSORT is an algorithm for estimate immune cell fractions.
+
+
+# Preparing the data
+CIBERSORT is limited to a specific set of genes (LM22) that are used for the signature. The website requires that the data be in gene symbol format, so we need to convert the TCC data to gene symbols.
+
+We use the ```LM22.txt``` file to identify the gene symbols needed. Mapping this with the HuRSTA annotation file, we can identify gene symbols vs. probesets. However, more than one probeset matches the gene symbol. So we pick the probeset with the highest median value as the representative probeset for the gene. The resulting mapping is in ```CIBERSORT-HuRSTA-mapping.txt```. The data itself is in ```tcc-primary-CIBERSORT.txt```.
+
+The script that is used to do this work is ```findLM22Probes.HuRSTA.R```.
+
+
+```{r setup}
+
+```
+
+
+Read in the annotation and intersect with the LM22 gene list.
+```{r}
+lm22<-read.table(file="LM22.txt",header=T,row.names=1,sep="\t")
+lm22_genes<-rownames(lm22)
+hursta_annotation<-read.table(file="../../data.raw/hursta_annotation.txt",
+                              header=T,sep="\t",comment.char="",quote="",
+                              stringsAsFactors = FALSE,
+                              row.names=1)
+
+lm22_hursta<-hursta_annotation[which(hursta_annotation$Symbol %in% lm22_genes),]
+
+```
+
+
+```{r}
+tcc.primary.expression<-readRDS(file="../../data.derived/tcc-primary-expression.RDS")
+medians<-apply(tcc.primary.expression,1,median)
+names(medians)<-rownames(tcc.primary.expression)
+
+CIBERSORT.mapping<-data.frame(row.names=unique(lm22_hursta$"Symbol"))
+
+for (g in lm22_hursta$"Symbol") {
+   potential.probesets<-rownames(lm22_hursta)[which(lm22_hursta$"Symbol"==g)]
+   chosen.probeset<-potential.probesets[which(max(medians[potential.probesets])==medians[potential.probesets])]
+   CIBERSORT.mapping[g,"Probeset"]<-chosen.probeset
+}
+
+write.table(file="CIBERSORT-HuRSTA-mapping.txt",CIBERSORT.mapping,quote=F,sep="\t")
+```
+
+```{r}
+
+# Create a subset
+tcc.CIBERSORT<-tcc.primary.expression[CIBERSORT.mapping[,"Probeset"],]
+tcc.CIBERSORT.probesets<-rownames(tcc.CIBERSORT)
+rownames(tcc.CIBERSORT)<-rownames(CIBERSORT.mapping)
+write.table(file="tcc-primary-CIBERSORT.txt",tcc.CIBERSORT,quote=F,sep="\t")
+write.table(file="tcc-primary-CIBERSORT-probesets.txt",tcc.CIBERSORT.probesets,quote=F,sep="\t")
+```
+
+# Running CIBERSORT
+Next, CIBERSORT was accessed on 2017-05-19. The LM22 signature was used with quantile normalization to generate CIBERSORT results. These results were saved in ```CIBERSORT.Output_2017-05-19.txt```. 
+
+# Output CIBERSORT
+Based on the CIBERSORT output, load this into an R object. 
+```{r}
+cibersort<-read.table(file="CIBERSORT.Output_2017-05-19.txt",header=T,row.names=1,sep="\t")
+```
+
+# NCA
+We also compute what we term "Normalized Cellular Abundance", which is the cibersort percentage multiplied by the estimate
+immune score. We prefix the cellular information with "NCA-" to distinguish it.
+```{r}
+estimate_scores<-readRDS(file="../../data.derived/estimate_scores.RDS")
+cibersort_rel<-cibersort[rownames(estimate_scores),]
+
+
+# Calculate the normalized cibersort abundance by multiplying through the
+# immune score from estimate
+immune.score<-estimate_scores[,"ImmuneScore"]+abs(min(estimate_scores[,"ImmuneScore"]))
+cibersort_nca<-(cibersort_rel[,1:22]*immune.score)
+
+colnames(cibersort_nca)<-sub("$","_NCA",colnames(cibersort_nca))
+colnames(cibersort_rel)[1:22]<-sub("$","_REL",colnames(cibersort_rel)[1:22])
+
+```
+
+Then write all versions out for reference.
+```{r}
+saveRDS(cibersort, file="../../data.derived/cibersort_scores.RDS")
+saveRDS(cibersort_rel,file="../../data.derived/cibersort_scores_rel.RDS")
+saveRDS(cibersort_nca,file="../../data.derived/cibersort_scores_nca.RDS")
+
+```
+
+
+```{r session.info.table,results='asis',echo=FALSE}
+CosmosReportTemplates::print_session_information()
+```

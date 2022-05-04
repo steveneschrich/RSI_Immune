@@ -1,0 +1,69 @@
+---
+title: "Project RSI_Immune: ssGSEA Analysis"
+shorttitle: "RSI_Immune"
+project: 
+srpt_number: 
+version: "`r CosmosReportTemplates::git_tag()`"
+author: 'Steven Eschrich'
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+investigators:
+  - name: "Daniel Grass"
+  - name: "Javier Torres-Roca"
+project_team:
+analysis_team:
+analysis_contact:
+organization: 
+output:
+  CosmosReportTemplates::bbsr_article_pdf: default
+  word_document: default
+  pdf_document: default
+  html_document: default
+toc: yes
+---
+
+```{r setup}
+library(affy)
+library(GSEABase)
+library(affy)
+library(GSVA)
+library(HuRSTA.db)
+library(GSEABase)
+library(parallel)
+```
+
+# Expression Data
+```{r}
+
+tcc_primary<-readRDS(file="../../data.derived/tcc-primary-expression.RDS")
+
+```
+
+
+# Annotation
+We need to have the geneset(s) associated with the hallmarks, to get the immune hallmarks evaluated. We downloaded the ssGSEA2.0 package for the gene set definitions of the hallmarks.
+```{r}
+# getGmt returns a GeneSetCollection, which is needed by gsva to
+# do lookups of gene symbols to probesets (which we have).
+msigdb_hallmarks_4gsva<-getGmt("../../data.raw/ssGSEA2.0-master/db/msigdb/h.all.v6.2.symbols.gmt",
+			collectionType=BroadCollection(category="h"),
+                      	geneIdType=SymbolIdentifier()
+)
+```
+
+
+# ssGSEA
+The actual call to gsva (which implements ssgsea) is pretty simple.
+
+```{r}
+gsva_results<-gsva(tcc_primary, msigdb_hallmarks_4gsva, annotation="HuRSTA.db",
+			method="ssgsea", parallel.sz=5, verbose=TRUE)
+```
+
+```{r}
+saveRDS(gsva_results, file="../../data.derived/gsva_results.RDS")
+```
+
+
+```{r session.info.table,results='asis',echo=FALSE}
+CosmosReportTemplates::print_session_information()
+```

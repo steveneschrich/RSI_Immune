@@ -1,0 +1,217 @@
+---
+title: "Project RSI_Immune: Immunophenotypes"
+project: "RSI_Immune"
+srpt_number: 007
+version: "`r CosmosReportTemplates::git_tag()`"
+author: 'Steven Eschrich'
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+investigators:
+  - name: "Daniel Grass"
+  - name: ""
+project_team:
+analysis_team:
+analysis_contact:
+organization: "MCC Biostatistics & Biofinformatics"
+output:
+  CosmosReportTemplates::bbsr_pdf: default
+toc: yes
+---
+
+
+# Overview
+This document is to recreate a figure from
+https://www.sciencedirect.com/science/article/pii/S2211124716317090
+https://github.com/icbi-lab/Immunophenogram
+https://tcia.at/home
+
+
+which shows specific immune-related genes grouped per a particular immuno-categorization. Essentially, we create a heatmap with gene expression/gene expression differences in columns that are arranged per the classification in the above paper.
+
+```{r setup}
+suppressPackageStartupMessages({
+  library(readxl)
+  library(Biobase)
+  library(ComplexHeatmap)
+  library(dplyr)
+  library(tibble)
+  
+})
+source("../../src/color_gradient.R")
+source("../../src/draw_immunophenotype.R")
+source("../../src/map_genes.R")
+```
+
+
+Load the TCC dataset and map to gene symbols (not probesets).
+```{r load-data}
+tcc_exprs<-readRDS("../../data.derived/tcc-primary-expression.RDS")
+tcc_metadata<-readRDS("../../data.derived/tcc-primary-metadata.RDS")
+
+tcc<-ExpressionSet(assayData=tcc_exprs, phenoData=AnnotatedDataFrame(tcc_metadata), annotation="hursta2a520709")
+tcc_by_gene<-biomarkerLibrary::getExpressionSetByGeneSymbol(tcc)
+
+result_table<-readRDS("../../data.derived/result_table.RDS") %>%
+  tibble::as_tibble(rownames="BARCODE") %>%
+  filter(!is.na(SOO_Merged))
+graph_config<-read_excel("../../data.raw/Graph_Colors_Shapes.xlsx")
+
+```
+
+
+# Gene Annotation
+The mapping to specific genes in the immunophenotype was taken from the paper by manual
+abstraction and translation (to official gene symbols). Here, we create an object for reuse
+of this data.
+```{r get-gene-annotation}
+#gene_map_raw<-rio::import("../../data.raw/Immune_Markers_RSI_8.2021.xlsx", sheet="Sheet1")
+gene_map_raw<-rio::import("../../data.raw/Immune_Markers_RSI_20210806.xlsx", sheet="Table")
+gene_map<-gene_map_raw %>%
+  mutate(Class = factor(Class, levels=c("IMMUNOSTIMULATOR","IMMUNOINHIBITOR","MHC"))) %>%
+  arrange(Class, Gene_Order) %>%
+  # Only use genes on the array.
+  filter(`Approved symbol` %in% rownames(tcc_by_gene)) %>%
+  distinct()
+
+saveRDS(gene_map, file="../../data.derived/immunophenotype_gene_mapping.rds")
+```
+
+
+Data shaping to prepare data for plotting.
+```{r data-shaping}
+
+
+
+# The visualization table can be used for different forms of visualization below.
+vtable<-exprs(tcc_by_gene)[gene_map$`Approved symbol`,] %>% 
+  # 2021-08-11 Change gene symbol to the "Symbol to Display" column
+  as_tibble(rownames="GENE") %>%
+  left_join(dplyr::select(gene_map, `Approved symbol`),
+            by=c("GENE"="Approved symbol")) %>%
+  column_to_rownames(var="GENE") %>%
+  # Transpose since we work with genes in columns.
+  t() %>%
+  # Create tibble, getting rid of rownames
+  tibble::as_tibble(rownames = "BARCODE") %>%
+  # Add in pdata so we have everything we need from there (note the select to reduce what we get).
+  inner_join(
+    pData(tcc_by_gene) %>%
+               as_tibble(rownames="BARCODE") %>% 
+               dplyr::select("BARCODE","SOO_Merged"), 
+    by=c("BARCODE"="BARCODE")
+  ) %>%
+  # Same for result_table (note the select to reduce what we get)
+   inner_join(result_table %>%
+                dplyr::select("BARCODE","RSI_Category_Merged"), 
+              by=c("BARCODE"="BARCODE")
+  ) %>%
+  # Add in disease labels
+  dplyr::left_join(graph_config %>%
+                     dplyr::select(SOO_Merged, tissue_abbreviations),
+                   by=c("SOO_Merged"="SOO_Merged")) 
+  
+# Immune score is for annotation purposes.  
+ImmuneScore<-vtable %>%
+  dplyr::inner_join(result_table %>% dplyr::select("BARCODE","ImmuneScore"), 
+                    by=c("BARCODE"="BARCODE")) %>%
+  dplyr::group_by(tissue_abbreviations) %>%
+  dplyr::summarize(ImmuneScore=median(ImmuneScore)) %>%
+  dplyr::arrange(desc(ImmuneScore)) %>%
+  tibble::deframe()
+
+
+  
+```
+
+# Visualizations
+
+First, visualize gene expression.
+```{r visualize-expression}
+
+gexprs<-vtable %>%
+  dplyr::group_by(tissue_abbreviations) %>%  
+  dplyr::summarize(across(where(is.double), median)) %>%
+  tibble::column_to_rownames("tissue_abbreviations") %>%
+  data.matrix()
+
+ip<-draw_immunophenotype(gexprs,
+                         classes = map_gene_class(colnames(gexprs)),
+                         legend_title = "Gene\nExpression",
+                         annotations = ImmuneScore,
+                         annotation_name = "Immune\nScore",
+                         gene_labels = map_gene_display_name(colnames(gexprs)),
+                         cluster_column_slices = TRUE
+)
+
+cairo_pdf("immunophenotype_expression.pdf", width=10, height=5)
+draw(ip)
+dev.off()
+
+```
+
+# Heatmap Differences
+Show the Immunephenotype by median expression difference per group.
+
+```{r isualize-differences}
+expr_diffs<-vtable %>%
+  # group by tissue and RSI category
+  dplyr::group_by(`tissue_abbreviations`, `RSI_Category_Merged`) %>%
+  # And summarize to the median value (explictly drop all groups)
+  dplyr::summarize(across(where(is.double), median), .groups="drop") %>%
+  # Regroup now by tissue
+  group_by(`tissue_abbreviations`) %>%
+  # Do this carefully, sort by tissue and RSI value (HI, LOW)
+  arrange(tissue_abbreviations, RSI_Category_Merged) %>%
+  #  This will calculate the difference LOW-HI (up in low RSI)
+  summarize(across(where(is.double), function(x){x[2]-x[1]})) %>%
+  # 
+  tibble::column_to_rownames("tissue_abbreviations") %>%
+  data.matrix()
+
+ip<-draw_immunophenotype(expr_diffs, 
+                         classes = map_gene_class(colnames(expr_diffs)),
+                         legend_title = expression("RSI"^{lo} - RSI^{hi}),
+                         annotations = ImmuneScore,
+                         annotation_name = "Immune\nScore",
+                         gene_labels = map_gene_display_name(colnames(expr_diffs)),
+                         cluster_columns = TRUE
+                         )
+cairo_pdf("Figure_3D_Immunophenotypes.pdf", width=10, height=5)
+draw(ip)
+dev.off()
+
+```
+# z-score
+Alternately, we can z-score the expression then visualize the results.
+
+```{r visualize-z-scores}
+
+gexprs_z<-vtable %>%
+  dplyr::mutate(across(where(is.double), scale)) %>%
+  # group by tissue and RSI category
+  dplyr::group_by(`tissue_abbreviations`) %>%
+  # And summarize to the mean value (explictly drop all groups)
+  dplyr::summarize(across(where(is.double), median), .groups="drop") %>%
+  tibble::column_to_rownames("tissue_abbreviations") %>%
+  data.matrix()
+
+
+
+ip<-draw_immunophenotype(gexprs_z, 
+                         classes = map_gene_class(colnames(gexprs_z)),
+                         legend_title = "Gene\nExpression\nScaled",
+                         annotations = ImmuneScore,
+                         annotation_name = "Immune\nScore",
+                         map_gene_display_name(colnames(gexprs_z)))
+
+cairo_pdf("immunophenotype_zscores.pdf", width=10, height=5)
+draw(ip)
+dev.off()
+
+
+
+```
+
+
+```{r session.info.table, results='asis',echo=FALSE}
+CosmosReportTemplates::print_session_information()
+```

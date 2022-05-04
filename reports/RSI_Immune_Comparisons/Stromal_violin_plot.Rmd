@@ -1,0 +1,59 @@
+---
+title: "Project RSI_Immune: Stromal Violin Plot"
+shorttitle: "RSI_Immune"
+project: 
+srpt_number: 
+version: "`r CosmosReportTemplates::git_tag()`"
+author: 'Steven Eschrich'
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+investigators:
+  - name: "Daniel Grass"
+  - name: "Javier Torres-Roca"
+project_team:
+analysis_team:
+analysis_contact:
+organization: 
+output:
+  CosmosReportTemplates::bbsr_article_pdf: default
+  word_document: default
+  pdf_document: default
+  html_document: default
+toc: yes
+---
+
+```{r setup}
+library(readxl)
+library(grid)
+```
+
+
+```{r}
+result.table<-readRDS("../../data.derived/result_table.RDS")
+graph_details<-read_excel("../../data.raw/Graph_Colors_Shapes.xlsx")
+graph_map<-graph_details$tissue_abbreviations
+names(graph_map)<-graph_details$SOO_Merged
+```
+
+
+
+Figure Supplemental: Violin plot of stromal score
+
+```{r}
+source("../../src/dviolin_plot.R")
+pdf("Figure_S4_stromal_violin_plot.pdf",height=11,width=8.5)
+pushViewport(viewport(layout=grid.layout(3, 1,
+                                         heights=unit(c(1, 1, 1), c("lines", "null", "lines")))))
+pushViewport(viewport(layout.pos.row=2,layout.pos.col=1))
+dviolin_plot(data.frame(category=graph_map[result.table$SOO_Merged],values=result.table$StromalScore),plot_vertical = FALSE,bw="nrd0",
+                main="Stromal Distribution Across TCC",ylab="Stromal Score",show_n=FALSE, value_label="Stromal Score",
+             density.color.high="yellow",
+             density.color.mid="darkgreen",
+             density.color.low="blue")
+popViewport()
+pushViewport(viewport(layout.pos.row=3,layout.pos.col=1))
+grid.text(0.2,0.8, label="Extended Data Figure 4")#, gp=gpar(fontface="bold"))
+popViewport()
+dev.off()
+```
+
+

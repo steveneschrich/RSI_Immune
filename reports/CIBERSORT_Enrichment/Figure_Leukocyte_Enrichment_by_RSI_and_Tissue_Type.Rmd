@@ -1,0 +1,672 @@
+---
+title: "Project RSI_Immune: Leukocyte Enrichment"
+author: 'Steven Eschrich'
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+version: "`r CosmosReportTemplates::git_tag()`"
+shorttitle: "RSI_Immune"
+project: 
+investigators:
+- name: Daniel Grass
+- name: Javier Torres-Roca
+project_team: 
+analysis_team: 
+analysis_contact: 
+organization: 
+srpt_number: 
+toc: yes
+output:
+  CosmosReportTemplates::bbsr_pdf: default
+  pdf_document: default
+---
+
+
+
+
+
+```{r setup}
+library(qvalue)
+library(ComplexHeatmap)
+library(dplyr)
+library(stringr)
+library(circlize)
+library(readr)
+library(readxl)
+library(tibble)
+
+# Font experiments:
+library(extrafont)
+```
+
+
+```{r}
+# The initial figures were clustered (the tissue types) by immune score from lower to higher. Then
+# there was interest in just having the clustering algorithm do it's thing. This flag controls 
+# whether to use the original approach (TRUE) or let clustering happen (FALSE).
+
+
+arrange_tissue_type_by<-c("cluster","immune","iris")[2]
+
+
+# Another modification. Rearrange the rows of the heatmaps by the TIL percentage different (q<0.05)
+order_by_til_percent<-TRUE
+
+# Fonts are a big problem in these figures. They have to be Unicode compatible (because of the special characters)
+# and ideally multi-platform. So I'm using some google fonts, in addition to Arial Unicode. Set the font name here
+# to use throughout
+# font_name<-"Arial Unicode MS"
+font_name<-"Noto Serif"
+```
+
+
+# Data
+We begin the figure from the result table.
+```{r}
+# NB: In order to use iRIS we use a result table with that additional field in it.
+#result.table<-readRDS(file="../../data.derived/result_table.RDS")
+result.table<-readRDS(file="../../data.derived/result_table_with_iRIS.RDS")
+```
+
+
+Define variable for each cell type for reference.
+```{r}
+
+immune.celltypes<-sub("_REL","",colnames(result.table)[grep("_REL$",colnames(result.table))])
+  
+```
+
+
+
+
+# Enrichment of RSI by TIL in each tissue type
+This is a complicated series of loops to compute the RSI high/low values across tissue types and across
+TIL high/low.
+
+```{r}
+
+# Heatmap of %enrichment by tissue type by cell type
+
+# Initialize all the needed data structures...
+heatmap.table.rsi<-data.frame()
+fisher.pvalue.table<-data.frame()
+utest.pvalue.table<-data.frame()
+
+tissue.types<-na.omit(unique(result.table$SOO_Merged))
+
+label_rsi_hi<-function(category) {return(sprintf("%s_rsi-hi", category))}
+label_rsi_lo<-function(category) {return(sprintf("%s_rsi-lo", category))}
+
+# This massive loop calculates all of the necessary enrichment, per tissue type.
+for (tissue in tissue.types) {
+  result.table.subset<-result.table[which(result.table$SOO_Merged==tissue),]
+  
+  #print(tissue)
+  #print(table(result.table.subset$RSI_Category_Merged,result.table.subset$Immune_Category_Merged))
+
+    # Record the percentage in RSI hi and RSI low of Immune high
+  result.table.subset.hi<-result.table.subset[which(result.table.subset$RSI_Category_Merged=="HI"),]
+  result.table.subset.lo<-result.table.subset[which(result.table.subset$RSI_Category_Merged=="LOW"),]
+  heatmap.table.rsi[label_rsi_lo("immune"),tissue]<-length(which(result.table.subset.lo$Immune_Category_Merged=="HI"))/nrow(result.table.subset.lo)
+  heatmap.table.rsi[label_rsi_hi("immune"),tissue]<-length(which(result.table.subset.hi$Immune_Category_Merged=="HI"))/nrow(result.table.subset.hi)
+  # For historical reasons, I calculate the fisher and utest twice, once each for hi and lo, even though 
+  # the test looks at all four combination (hi/low/hi/low). This is for convenience when accessing this data later.
+  fisher.pvalue.table[label_rsi_lo("immune"),tissue]<-fisher.test(table(result.table.subset$RSI_Category_Merged,result.table.subset$Immune_Category_Merged))$p.value
+  fisher.pvalue.table[label_rsi_hi("immune"),tissue]<-fisher.test(table(result.table.subset$RSI_Category_Merged,result.table.subset$Immune_Category_Merged))$p.value
+  utest.pvalue.table[label_rsi_lo("immune"),tissue]<-wilcox.test(result.table.subset[,"ImmuneScore"]~result.table.subset$RSI_Category_Merged,exact=FALSE)$p.value
+  utest.pvalue.table[label_rsi_hi("immune"),tissue]<-wilcox.test(result.table.subset[,"ImmuneScore"]~result.table.subset$RSI_Category_Merged,exact=FALSE)$p.value
+  
+  for (celltype in immune.celltypes) {
+    celltype.var<-paste("NCA_",celltype,"_Category_Merged",sep="")
+    
+    #print(paste(tissue,celltype))
+    ct<-table(result.table.subset$RSI_Category_Merged,result.table.subset[,celltype.var])
+    # Record the percentage in RSI hi and RSI low of Immune high
+    result.table.subset.hi<-result.table.subset[which(result.table.subset$RSI_Category_Merged=="HI"),]
+    result.table.subset.lo<-result.table.subset[which(result.table.subset$RSI_Category_Merged=="LOW"),]
+    heatmap.table.rsi[label_rsi_lo(celltype.var),tissue]<-length(which(result.table.subset.lo[,celltype.var]=="HI"))/nrow(result.table.subset.lo)
+    heatmap.table.rsi[label_rsi_hi(celltype.var),tissue]<-length(which(result.table.subset.hi[,celltype.var]=="HI"))/nrow(result.table.subset.hi)
+    if (ncol(ct)>1 && nrow(ct)>1) {
+      fisher.pvalue.table[label_rsi_lo(celltype.var),tissue]<-fisher.test(table(result.table.subset$RSI_Category_Merged,result.table.subset[,celltype.var]))$p.value
+      fisher.pvalue.table[label_rsi_hi(celltype.var),tissue]<-fisher.test(table(result.table.subset$RSI_Category_Merged,result.table.subset[,celltype.var]))$p.value
+      
+    } else {
+      fisher.pvalue.table[label_rsi_lo(celltype.var),tissue]<-1
+      fisher.pvalue.table[label_rsi_hi(celltype.var),tissue]<-1
+    }
+    utest.pvalue.table[label_rsi_lo(celltype.var),tissue]<-wilcox.test(result.table.subset[,paste0(celltype,"_NCA")]~result.table.subset$RSI_Category_Merged,exact=FALSE)$p.value    
+    utest.pvalue.table[label_rsi_hi(celltype.var),tissue]<-wilcox.test(result.table.subset[,paste0(celltype,"_NCA")]~result.table.subset$RSI_Category_Merged,exact=FALSE)$p.value    
+    
+  }
+}
+
+# Create the summary table of corrected p values (q values) using the qvalue function.
+utest.qvalue.table<-matrix(data=qvalue(unlist(utest.pvalue.table))$qvalues,nrow=nrow(utest.pvalue.table),ncol=ncol(utest.pvalue.table),dimnames=list(rownames(utest.pvalue.table),colnames(utest.pvalue.table)))
+fisher.qvalue.table<-matrix(data=qvalue(unlist(fisher.pvalue.table))$qvalues,nrow=nrow(fisher.pvalue.table),ncol=ncol(fisher.pvalue.table),dimnames=list(rownames(fisher.pvalue.table),colnames(fisher.pvalue.table)))
+
+```
+
+
+# Cell types
+Immune cell types are classified as Adaptive or Innate. Categorize the results accordingly.
+```{r}
+
+# start from result.table and the file CellTypeClassification.txt
+cell.type.classification<-read.table(file="../../data.raw/CellTypeClassification.txt",header=T,row.names=1,sep="\t")
+
+
+# Subset SOO_Merged table into Adaptive and Innate cell types
+adaptive.cell.types<-sort(rownames(cell.type.classification)[which(cell.type.classification$ImmuneType=="Adaptive")])
+adaptive.names<-paste0("NCA_",adaptive.cell.types,"_Category_Merged")
+adaptive.names.rsi.hilo<-as.vector(sapply(adaptive.names,
+                                          function(y) {
+                                            c(paste0(y,"_rsi-lo"),
+                                              paste0(y,"_rsi-hi"))
+                                          })
+                                   )
+innate.cell.types<-sort(rownames(cell.type.classification)[which(cell.type.classification$ImmuneType=="Innate")])
+innate.names<-paste0("NCA_", innate.cell.types, "_Category_Merged")
+innate.names.rsi.hilo<-as.vector(sapply(innate.names, 
+                                          function(y){
+                                            c(paste0(y,"_rsi-lo"),
+                                              paste0(y,"_rsi-hi"))
+                                          })
+                                 ) 
+
+```
+
+
+
+# Heatmap
+We use ComplexHeatmap for the heatmap of enrichments.
+
+## Fonts
+Since we use special characters, we need specific fonts.
+
+```{r eval-FALSE}
+# Run font_import if the fonts are not already available in R.
+# library(extrafont)
+# font_import(paths=c("fonts/"))
+#font_import()
+loadfonts(device = "pdf")
+# fonts()
+```
+
+
+
+## Tissue type organization
+We organize the SOO_Merged by highest to lowest immune score. 
+```{r}
+
+
+summarize_iris<-function(tissues) {
+  as.matrix(data.frame(aggregate(iRIS ~ SOO_Merged, data=result.table, FUN=median),
+                               row.names="SOO_Merged")[tissues,,drop=F]
+  )
+}
+
+summarize_immune<-function(tissues) {
+  as.matrix(data.frame(aggregate(ImmuneScore ~ SOO_Merged, data=result.table, FUN=median),
+                               row.names="SOO_Merged")[tissues,,drop=F]
+  )
+}
+
+tissue_type_medians<-function(tissues, which=c("cluster","immune","iris")) {
+  switch(which,
+         iris = summarize_iris(tissues),
+         immune = summarize_immune(tissues),
+         cluster = NA
+  )
+}
+tissue_type_column_order<-function(m, which=c("cluster","immune","iris")) {
+
+  switch(which, 
+         
+         iris = {
+            # Summarize iris by median, ensure the values are arranged per the input matrix, then
+            # return an ordering of that result.
+            order(summarize_iris(colnames(m)))
+          },
+          immune = {
+            # Summarize immune by median, ensure the values are arranged per the input matrix, then
+            # return an ordering of that result.
+            order(summarize_immune(colnames(m)))
+          },
+          cluster = {
+            # Here, just cluster m
+            column_order(Heatmap(m, cluster_rows=FALSE))
+          }
+  )
+}
+
+```
+
+
+## Tissue type abbreviations (in immune score order)
+
+```{r}
+
+# For the paper, the tissue types have unique colors, shapes, and labels associated with them.
+master_graph_key<-read_excel("../../data.raw/Graph_Colors_Shapes.xlsx")
+
+tissue_type_labels<-function(m) {
+  deframe(enframe(m,name=NULL,value="tissue_type") %>%
+                              left_join(master_graph_key, by=c("tissue_type"="SOO_Merged")) %>%
+                              select("tissue_abbreviations"))
+}
+
+```
+
+## Colors
+```{r}
+
+#We use an FDR for the fisher tests we do, set the threshold here for the colors associated with q<0.05 vs q>0.05.
+# q value threshold
+q_threshold<-0.05
+
+# The heatmap has a custom color scheme (based on heatmap.2)
+color_mapping<-read_excel("../../data.raw/Leukocyte_Heatmap_Color_Mapping.xlsx")
+
+# This function provides black (for significant < 0.05) and white otherwise. I do this by having
+# a very narrow range of interpolation (.05 to .050001).
+significance_colors<-colorRamp2(c(q_threshold,q_threshold+0.000001),c("black","white"))
+# Proportions are a fixed color map
+proportion_colors<-colorRamp2(color_mapping$Threshold, color_mapping$Hex)
+```
+
+# Graph labels
+For Adaptive TILs
+```{r}
+adaptive_TIL_names<-expression(
+  "Mem B RSI"^"lo", "Mem B RSI"^"hi",
+  "Naïve B RSI"^"lo", "Naïve B RSI"^"hi",
+  "PC RSI"^"lo", "PC RSI"^"hi",
+  "Mem CD4 T+ RSI"^"lo", "Mem CD4 T+ RSI"^"hi",
+  "Mem CD4 T- RSI"^"lo", "Mem CD4 T- RSI"^"hi",
+  "Naïve CD4 T RSI"^"lo", "Naïve CD4 T RSI"^"hi",
+  "CD8 T RSI"^"lo", "CD8 T RSI"^"hi",
+  "Tfh RSI"^"lo", "Tfh RSI"^"hi",
+  "γδ T RSI"^"lo", "γδ T RSI"^"hi",
+  "Treg RSI"^"lo", "Treg RSI"^"hi"
+)
+```
+
+
+
+# Adaptive Heatmap
+
+TODO TODO TODO TODO
+Use function calls to reorder rows as well.
+```{r}
+# Adaptive-specific variables.
+heatmap.matrix<-as.matrix(heatmap.table.rsi[adaptive.names.rsi.hilo,])
+heatmap.qvalues<-fisher.qvalue.table[adaptive.names.rsi.hilo,]
+heatmap.num_significant<-apply(heatmap.qvalues, 1, function(y){length(which(y<0.05))})
+heatmap.percent_significant<-apply(heatmap.qvalues, 1, function(y){100*length(which(y<0.05))/length(y)})
+
+# Order TILs, if needed
+if ( order_by_til_percent ) {
+  new_orderi<-order(heatmap.percent_significant)
+  new_order<-adaptive.names.rsi.hilo[new_orderi]
+  heatmap.matrix<-heatmap.matrix[new_order,]
+  heatmap.qvalues<-heatmap.qvalues[new_order,]
+  adaptive_TIL_names_in_order<-adaptive_TIL_names[new_orderi]
+  heatmap.num_significant<-apply(heatmap.qvalues, 1, function(y){length(which(y<0.05))})
+  heatmap.percent_significant<-apply(heatmap.qvalues, 1, function(y){100*length(which(y<0.05))/length(y)})
+
+}
+
+
+figure.adaptive<-NULL
+# This builds the heatmap up from individual row pairs
+for (til in seq(1,nrow(heatmap.matrix)-1,by=2)) {
+  
+  
+  percent_fdr_annotation<-HeatmapAnnotation(which="row",
+                                            name=sprintf("%d_percent_significant_annotation",til),
+                                            "% q < 0.05"=anno_barplot(
+                                                            c(NA,heatmap.percent_significant[til]),
+                                                            ylim=c(0,max(heatmap.percent_significant)),
+                                                            border=FALSE,
+                                                            axis=FALSE,
+                                                            bar_width = 1,
+                                                            gp = gpar(fill = "black", fontfamily=font_name)
+                                                            
+                                                        ),
+                                      show_annotation_name = FALSE,
+                                      annotation_name_gp = gpar(fontsize=8),
+                                      annotation_name_rot = NULL
+                                      )
+  
+  h<-Heatmap(heatmap.matrix[til:(til+1),],
+             name=sprintf("%d_til_main_heatmap",til),
+             cluster_rows = FALSE,
+             cluster_columns = FALSE,
+             row_labels = adaptive_TIL_names_in_order[til:(til+1)],
+             column_labels = tissue_type_labels(colnames(heatmap.matrix)),
+             row_names_gp=gpar(fontfamily=font_name,fontsize=12),
+             column_names_gp=gpar(fontfamily=font_name, fontsize=10),
+             right_annotation = percent_fdr_annotation,
+             heatmap_legend_param = list(title = "Proportion"),
+             col = proportion_colors,
+             show_heatmap_legend = FALSE,
+             row_names_side="left",
+             column_order=tissue_type_column_order(heatmap.matrix, arrange_tissue_type_by)
+  )
+  q<-Heatmap(heatmap.qvalues[til,,drop=FALSE],
+             name=sprintf("%d_qvalue_indicator",til),
+             show_row_names = FALSE, 
+             column_labels = tissue_type_labels(colnames(heatmap.matrix)),
+             column_names_gp=gpar(fontfamily=font_name, cex=0.75),
+             col = significance_colors,
+             height=unit(1,"mm"),
+             show_heatmap_legend = FALSE,
+             border = TRUE,
+             column_order=tissue_type_column_order(heatmap.matrix, arrange_tissue_type_by))
+  figure.adaptive<-figure.adaptive %v% h %v% q
+
+}
+
+immunescore<-t(tissue_type_medians(colnames(heatmap.matrix), arrange_tissue_type_by))
+               
+figure.adaptive<-figure.adaptive %v% Heatmap(t(tissue_type_medians(colnames(heatmap.matrix), arrange_tissue_type_by)),
+                         name="score_indicator",
+                         col = colorRamp2(c(min(immunescore),
+                                                        median(immunescore),
+                                                        max(immunescore)),
+                                                   c("#ffffff","#c2a5cf","#7b3294")),
+                                             
+                         cluster_rows=FALSE,
+                         cluster_columns=FALSE,
+                         show_column_names=TRUE,
+                         show_column_dend = FALSE,
+                         show_row_dend = FALSE,
+                         show_heatmap_legend = FALSE,
+                         row_names_gp=gpar(fontfamily=font_name,fontsize=12),
+                         column_names_gp=gpar(fontfamily=font_name, fontsize=10),
+                         height=unit(2,"mm"),
+                         row_names_side="left",
+                         column_labels=tissue_type_labels(colnames(heatmap.matrix)),
+                         column_order=tissue_type_column_order(heatmap.matrix, arrange_tissue_type_by),
+                         right_annotation = HeatmapAnnotation(which="row",
+                                                              "% q<0.05"=anno_barplot(
+                                                                c(0.0001),
+                                                                ylim=c(0,max(heatmap.percent_significant)),
+                                                                border=FALSE,
+                                                                axis=TRUE,
+                                                                bar_width = 1,
+                                                                gp = gpar(fill = "black",fontfamily=font_name, fontsize=10),
+                                                                annotation_name_offset=unit(5,"mm"),
+                                                                width=unit(15,"mm") 
+                                                                
+                                                              ),
+                                                              
+                                                              show_annotation_name = TRUE,
+                                                              annotation_name_gp = gpar(fontsize=10, fontfamily=font_name)
+                                                              
+                         )
+)
+
+# Manually add the proportion legend
+lgd = Legend(col_fun = proportion_colors, title = "TIL Enrichment")
+
+# 
+```
+
+Write out the figure to a file (Figure 4B2)
+```{r}
+cairo_pdf(file="Figure_4B2_leukocyte_enrichment_adaptive.pdf")
+draw(figure.adaptive, ht_gap=unit(c(rep(c(1,4),10),1),"mm"), 
+     column_title = "Adaptive", 
+     column_title_gp = gpar(fontsize = 24, fontface = "bold"))
+dev.off()
+```
+
+
+
+
+# Innate Heatmap
+
+
+
+For Innate TILs
+```{r}
+# Graph labels for Innate TILs
+innate_TIL_names<-expression(
+  "DC+ RSI"^"lo", "DC+ RSI"^"hi",
+  "DC- RSI"^"lo", "DC- RSI"^"hi",
+  "Eos RSI"^"lo", "Eos RSI"^"hi",
+  "M0 RSI"^"lo", "M0 RSI"^"hi",
+  "M1 RSI"^"lo", "M1 RSI"^"hi",
+  "M2 RSI"^"lo", "M2 RSI"^"hi",
+  "MC+ RSI"^"lo", "MC+ RSI"^"hi",
+  "MC- RSI"^"lo", "MC- RSI"^"hi",
+  "Mono RSI"^"lo", "Mono RSI"^"hi",
+  "PMN RSI"^"lo", "PMN RSI"^"hi",
+  "NK+ RSI"^"lo", "NK+ RSI"^"hi",
+  "NK- RSI"^"lo", "NK- RSI"^"hi"
+)
+```
+
+```{r}
+# Innate-specific variables.
+heatmap.matrix<-as.matrix(heatmap.table.rsi[innate.names.rsi.hilo,])
+heatmap.qvalues<-fisher.qvalue.table[innate.names.rsi.hilo,]
+heatmap.num_significant<-apply(heatmap.qvalues, 1, function(y){length(which(y<0.05))})
+heatmap.percent_significant<-apply(heatmap.qvalues, 1, function(y){100*length(which(y<0.05))/length(y)})
+
+# Reset the order of TILs, if needed
+if ( order_by_til_percent ) {
+  new_orderi<-order(heatmap.percent_significant)
+  new_order<-innate.names.rsi.hilo[new_orderi]
+  heatmap.matrix<-heatmap.matrix[new_order,]
+  heatmap.qvalues<-heatmap.qvalues[new_order,]
+  heatmap.num_significant<-heatmap.num_significant[new_order]
+  heatmap.percent_significant<-heatmap.percent_significant[new_order]
+  innate_TIL_names<-innate_TIL_names[new_orderi]
+
+}
+
+figure.innate<-NULL
+for (til in seq(1,nrow(heatmap.matrix)-1,by=2)) {
+  
+  percent_fdr_annotation<-HeatmapAnnotation(which="row",
+                                            "% q<0.05"=anno_barplot(
+                c(NA,heatmap.percent_significant[til]),
+                ylim=c(0,max(heatmap.percent_significant)),
+                border=FALSE,
+                axis=FALSE,
+                bar_width = 1,
+                gp = gpar(fill = "black",fontfamily=font_name)
+                ),
+        
+  #show_annotation_name = if (til==nrow(heatmap.matrix)-1) {TRUE} else {FALSE},
+  show_annotation_name = FALSE,
+  annotation_name_gp = gpar(fontsize=8, fontfamily=font_name),
+  annotation_name_rot = NULL
+  )
+  
+  h<-Heatmap(heatmap.matrix[til:(til+1),],
+             cluster_rows = FALSE,
+             cluster_columns = FALSE,
+             row_labels = innate_TIL_names[til:(til+1)],
+             row_names_side="left",
+             column_labels = tissue_type_labels(colnames(heatmap.matrix)),
+             row_names_gp=gpar(fontfamily=font_name,fontsize=12),
+             column_names_gp=gpar(fontfamily=font_name, fontsize=10),
+             right_annotation = percent_fdr_annotation,
+             heatmap_legend_param = list(title = "Proportion"),
+             col = proportion_colors,
+             show_heatmap_legend = FALSE,
+             column_order=tissue_type_column_order(heatmap.matrix, arrange_tissue_type_by)
+             
+  )
+  q<-Heatmap(heatmap.qvalues[til,,drop=FALSE], 
+             show_row_names = FALSE, 
+             column_labels = tissue_type_labels(colnames(heatmap.matrix)),
+             column_names_gp=gpar(fontfamily=font_name, cex=0.75),
+             col = significance_colors,
+             height=unit(1,"mm"),
+             show_heatmap_legend = FALSE,
+             border = TRUE,
+             column_order=tissue_type_column_order(heatmap.matrix, arrange_tissue_type_by))
+  figure.innate<-figure.innate %v% h %v% q
+  
+}
+# Add on immune score at the bottom
+immunescore<-t(tissue_type_medians(colnames(heatmap.matrix), arrange_tissue_type_by))
+figure.innate<-figure.innate %v% Heatmap(t(tissue_type_medians(colnames(heatmap.matrix), arrange_tissue_type_by)),
+                       name="innate_score_indicator",
+                       cluster_rows=FALSE,
+                       cluster_columns=FALSE,
+                       show_column_names=TRUE,
+                       col = colorRamp2(c(min(immunescore),
+                                                        median(immunescore),
+                                                        max(immunescore)),
+                                                   c("#ffffff","#c2a5cf","#7b3294")),
+                       column_labels=tissue_type_labels(colnames(heatmap.matrix)),
+                       show_column_dend = FALSE,
+                       show_row_dend = FALSE,
+                       show_heatmap_legend = FALSE,
+                       row_names_gp=gpar(fontfamily=font_name,fontsize=12),
+                       height=unit(2,"mm"),
+                       row_names_side = "left",
+                       column_order=tissue_type_column_order(heatmap.matrix,
+                                                             arrange_tissue_type_by),
+                       column_names_gp=gpar(fontfamily=font_name, fontsize=10),
+                       right_annotation = HeatmapAnnotation(which="row",
+                                                            "% q<0.05"=anno_barplot(
+                                                              c(0.0001),
+                                                              ylim=c(0,max(heatmap.percent_significant)),
+                                                              border=FALSE,
+                                                              axis=TRUE,
+                                                              bar_width = 1,
+                                                              gp = gpar(fill = "black",fontfamily=font_name, fontsize=12),
+                                                              annotation_name_offset=unit(5,"mm"),
+                                                             width=unit(15,"mm") 
+                                                              
+                                                            ),
+                                                            
+                                                            show_annotation_name = TRUE,
+                                                            annotation_name_gp = gpar(fontsize=10, fontfamily=font_name)
+                                                            
+                       )
+)
+```
+
+
+Write out the figure to a file (Figure 4B1)
+
+```{r}
+cairo_pdf(file="Figure_4B1_leukocyte_enrichment_innate.pdf")
+draw(figure.innate, 
+     ht_gap=unit(c(rep(c(1,4),12),1),"mm"),
+     column_title = "Innate", column_title_gp = gpar(fontsize = 24, fontface = "bold"))
+dev.off()
+```
+
+
+
+# Combined figure
+We combine 4B1 and 4B2 into a single figure, using the grid approach.
+
+## Legend
+```{r}
+# Draw the legend. Here, we manually create a legend as a heatmap itself, based on the color function defined.
+legend_points<-t(matrix(seq(0,0.8,by=0.01)))
+colnames(legend_points)<-rep("",81)
+# We need: 0, 0.2, 0.4, 0.6
+colnames(legend_points)[c(1, 21, 41, 61,81)]<-c("0","0.2","0.4","0.6","0.8")
+figure.legend<-Heatmap(legend_points, 
+                        name="Legend", 
+                        col=proportion_colors, 
+                        cluster_columns=FALSE, 
+                        column_names_rot = 0, 
+                        column_title="TIL Enrichment", 
+                        column_title_side="top",
+                        show_heatmap_legend=FALSE,
+                        column_title_gp=gpar(fontsize=14),
+                        column_names_gp = gpar(fontsize = 8, fontfamily=font_name),
+                        top_annotation = HeatmapAnnotation(LegendTriangle = anno_empty(border = FALSE), 
+                                                           annotation_height=unit(2,"mm")
+                                                           )
+        )
+```
+
+## Combined Figure
+
+
+```{r}
+# Layout is
+# |Margin|Margin|Margin|Margin|
+# |Margin|Heatmap|Heatmap|Margin|
+# |Margin|Margin|Margin|Margin|
+#
+cairo_pdf(file="Figure_4B_leukocyte_enrichment.pdf",width=13, height=8.5)
+grid.newpage()
+pushViewport(viewport(layout = grid.layout(nrow = 3, ncol = 4, widths =unit(c(0.01,0.47,0.51,0.01),"null"), heights = unit(c(0.05,0.9,0.05),"null"))))
+
+
+# Innate figure
+pushViewport(viewport(layout.pos.row = 2, layout.pos.col = 2))
+draw(figure.innate, ht_gap=unit(c(1,rep(c(4,1),11),1,1),"mm"), newpage=FALSE, column_title = "Innate", column_title_gp = gpar(fontsize = 24, fontface = "bold")) 
+upViewport()
+
+# Adaptive figure
+pushViewport(viewport(layout.pos.row = 2, layout.pos.col = 3))
+draw(figure.adaptive, newpage=FALSE, ht_gap=unit(c(1,rep(c(4,1),9),1,1),"mm"), column_title = "Adaptive", column_title_gp = gpar(fontsize = 24, fontface = "bold")) 
+upViewport()
+
+#pushViewport(viewport(layout.pos.row = 2, layout.pos.col = 3, just = c("left", "top")))
+# Legend
+pushViewport(viewport(
+  x=unit(7.0,"in"), 
+  y=unit(0.4,"in"),
+  width=unit(1.0, "in"),
+  height=unit(1,"in")))
+draw(figure.legend, newpage=FALSE)
+decorate_annotation("LegendTriangle", {
+  grid.polygon(x=c(0,1,1,0),y=c(0,0,1,0), default.units="npc", gp=gpar(fill=1))
+})
+upViewport()
+
+# Figure text
+#grid.text(x=unit(1,"in"),
+#          y=unit(0.3,"in"),
+#          "Figure 2"
+#)
+
+upViewport()
+dev.off()
+```
+
+
+# NB: This isn't finished yet.
+# Create a separate figure for the proportion legend (since these have to be stitched together later).
+#
+
+#lgd = Legend(col_fun = proportion_colors, title = "TIL Enrichment")
+
+# 
+
+#color_heatmap<-t(color_mapping$Threshold)
+#colnames(color_heatmap)<-as.character(color_mapping$Threshold)
+#colnames(color_heatmap)[seq(2,15,by=2)]<-""
+#h<-Heatmap(color_heatmap,
+#           cluster_rows = FALSE,
+#           cluster_columns = FALSE,
+#           show_column_names=TRUE,
+#           row_names_gp=gpar(fontfamily="Arial Unicode MS",cex=0.65),
+#           column_names_gp=gpar(fontfamily="Arial Unicode MS", cex=0.75),
+#           col = proportion_colors,
+#           show_heatmap_legend = FALSE,
+#           column_names_rot = 0, column_names_side = "bottom",
+#           column_title = 'TIL Enrichment',
+#           column_title_gp = gpar(fontsize = 20, fontface = "bold")
+#         
+#)
+
+#a<-HeatmapAnnotation(which="row","TIL Enrichment"=t(color_mapping$Threshold), col = list("TIL Enrichment" = proportion_colors))
+
+```{r session.info.table,results='asis',echo=FALSE}
+CosmosReportTemplates::print_session_information()
+```
+

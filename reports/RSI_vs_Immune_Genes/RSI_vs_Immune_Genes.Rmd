@@ -1,0 +1,275 @@
+---
+# The report title block contains all of this information, although
+# if they are missing they are excluded. Note that running_title is not
+# included, but is part of the header of the rest of the report.
+title: "Title of the Report"
+running_title: ""
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+project: ""
+srpt_number:
+version: 1.0
+investigators:
+  - name: ""
+  - name: ""
+project_team:
+analysis_contact:
+report_author: ""
+analysis_team:
+organization: "MCC Biostatistics & Bioinformatics"
+
+# A banner will run across the top page. For template packages,
+# you can use dsreportr::banner("mcctemplates::bbsr_pdf") or whatever
+# template string is used in the output block. Or name your own
+# image file. Note the width option allows the image to be stretched,
+# which may not be your intent.
+banner: "`r dsreportr::banner('mcctemplates::bbsr_pdf')`"
+banner_width: 5.5in
+
+# Output specific options. Note that this skeleton only really applies
+# to a specific template.
+output:
+  mcctemplates::bbsr_pdf:
+    latex_engine: pdflatex
+    keep_tex: false
+    
+# General settings for the report. Many of these settings are defaulted
+# and not always needed but can be overridden if desired.
+toc: yes
+toc_depth: 2
+number_sections: true
+fontsize: 11pt
+geometry:
+  - margin=1in
+  - top=1in
+  - bottom=1in
+  - footskip=0.5in
+  
+# This is a brief statement of the report purpose, etc that would be
+# available at the outset.
+abstract: 
+
+# These settings are extras, but I'm not sure they are valid.
+colorlinks: false
+urlcolor: "blue"
+linkcolor: "cyan"
+citecolor: "gray"
+toccolor: "cyan"
+
+---
+# Overview
+The goal of this document is to generate specific relationships between RSI and immune genes in the TCC cohort. While the use of CIBERSORT is useful, it can also be helpful to visualize specific gene expression with respect to RSI.
+
+
+```{r setup}
+library(dplyr)
+library(ggplot2)
+library(ggforce)
+library(tidyr)
+
+wd <- here::here("reports","RSI_vs_Immune_Genes")
+```
+
+Load the TCC dataset and map to gene symbols (not probesets).
+```{r load-data}
+tcc_exprs<-readRDS(here::here("data.derived","tcc-primary-expression.RDS"))
+tcc_metadata<-readRDS(here::here("data.derived","tcc-primary-metadata.RDS"))
+
+tcc<-Biobase::ExpressionSet(assayData=tcc_exprs, phenoData=Biobase::AnnotatedDataFrame(tcc_metadata),
+                            annotation="hursta2a520709")
+# Remove empty SOO_Merged
+tcc<-tcc[,!is.na(tcc$SOO_Merged)]
+
+# Convert to symbol-indexing
+tcc_by_gene<-biomarkerLibrary::getExpressionSetByGeneSymbol(tcc)
+rm(tcc_exprs, tcc_metadata)
+
+# Merge results.
+graph_config<-read_excel("../../data.raw/Graph_Colors_Shapes.xlsx")
+
+result_table<-readRDS(here::here("data.derived","result_table.RDS")) %>%
+  tibble::as_tibble(rownames="BARCODE") %>%
+  dplyr::filter(!is.na(SOO_Merged)) %>%
+  dplyr::mutate(RSI_Category_Merged = ifelse(RSI_Category_Merged=="LOW","LO",RSI_Category_Merged)) %>%
+  dplyr::mutate(RSI_Category_Merged = factor(RSI_Category_Merged, levels = c("LO","HI"))) %>%
+  dplyr::slice(match(BARCODE, colnames(tcc_by_gene)))
+stopifnot(all(result_table$BARCODE == colnames(tcc_by_gene)))
+
+
+
+```
+
+# Genes for visualization
+Several key immune genes can be examined:
+
+Checkpoint genes:
+
+- CD247 (PD-L1)
+- PDCD1 (PD-1)
+- CTLA4 (CTLA4)
+
+Immune genes:
+
+- CD47
+- CD8A
+- CD8B
+
+
+```{r}
+wdf <- tibble::tibble(
+  `BARCODE` = colnames(tcc_by_gene),
+  `PD-L1`=Biobase::exprs(tcc_by_gene)["CD247",],
+  `PD-1`=Biobase::exprs(tcc_by_gene)["PDCD1",],
+  `CTLA4`=Biobase::exprs(tcc_by_gene)["CTLA4",],
+  `CD47`=Biobase::exprs(tcc_by_gene)["CD47",],
+  `CD8A`=Biobase::exprs(tcc_by_gene)["CD8A",],
+  `CD8B`=Biobase::exprs(tcc_by_gene)["CD8B",],
+  Disease = Biobase::pData(tcc_by_gene) %>% dplyr::left_join(graph_config, by="SOO_Merged") %>% dplyr::pull("tissue_abbreviations"),
+  RSI = result_table$RSI_Category_Merged
+)
+
+df<- wdf %>%
+  tidyr::pivot_longer(cols = c("PD-L1","PD-1","CTLA4","CD47","CD8A","CD8B"), names_to = "Immune-related Genes",
+                      values_to = "Gene Expression")
+
+```
+
+
+# Graph
+We use boxplots of RSI hi/lo for each gene as the visualization of the differences.
+
+
+NOTE: The below code is no longer used. I could not figure out how to do the multi-page facets completely, so I did it myself manually.
+
+```{r eval=FALSE}
+# Set colors to tissue type from graph_colors
+igplot<-ggplot(df, aes(x=`Immune-related Genes`, y=`Gene Expression`, fill = RSI )) +
+  stat_boxplot(geom ='errorbar',  width=0.4, position=position_dodge(0.75)) +
+  geom_boxplot(position="dodge") +
+  # Facet wrapping is done multipage below
+
+    # The ggpubr theme is a good start for styling.
+  theme_pubr(base_size=10) +
+  # Use JCO colors
+  scale_fill_jco() +
+  scale_y_continuous(expand = expansion(mult = c(0.05, .15))) +
+  theme(panel.border = element_rect(fill=NA),
+        axis.ticks.x=element_blank()) +
+  stat_compare_means(vjust=-1, size=2, method="t.test") +
+  ggtitle("RSI vs. Immune-related Genes") 
+
+# I tried ggforce but could not get it to work with facet_grid correctly, so I went the manual
+# route.
+# Note, we go ahead and use facet, but explicitly get a list of pages from the
+# multi-page facet.
+#plot_list<-purrr::map(1:11, ~ igplot + 
+#             ggforce::facet_grid_paginate(Disease ~ `Immune-related Genes`, nrow=3, ncol =1 , page= #.x, scales = "free"))
+```
+
+```{r}
+plot_boxplots <- function(df, diseases) {
+  df <- dplyr::filter(df, `Disease` %in% diseases)
+  
+  p<-ggplot(df, aes(x=`Immune-related Genes`, y=`Gene Expression`, fill = RSI )) +
+    stat_boxplot(geom ='errorbar',  width=0.4, position=position_dodge(0.75)) +
+    geom_boxplot(position="dodge") +
+    # The ggpubr theme is a good start for styling.
+    theme_pubr(base_size=10) +
+    # Use JCO colors
+    scale_fill_jco() +
+    scale_y_continuous(expand = expansion(mult = c(0.05, .15))) +
+    theme(panel.border = element_rect(fill=NA),
+          axis.ticks.x=element_blank()) +
+    stat_compare_means(vjust=-1, size=3, method="t.test", aes(label = paste0("p = ", ..p.format..))) +
+    ggtitle("RSI vs. Immune-related Genes") +
+    ggplot2::facet_grid(cols = vars(`Immune-related Genes`), rows = vars(Disease), scales="free")
+  p
+}
+#' Calculate intervals of plots within a page
+#' 
+#' The individual (indexed) tissue types that belong on `page`, given
+#' that they are 4 per page.
+#'
+#' @param page 
+#' @param num_per_page
+#' @param maxlen 
+#'
+#' @return
+#' @export
+#'
+#' @examples
+interval <- function(page, number_of_pages = 8, maxlen=31) {
+  num_per_page <- ceiling(maxlen / number_of_pages)
+  start <- (page - 1) * num_per_page + 1
+  stop <- min(start + num_per_page - 1, maxlen)
+  start:stop
+}
+
+# Get sorted, unique disease list.
+disease_list <- df %>% 
+  dplyr::select(Disease) %>% 
+  dplyr::arrange(Disease) %>% 
+  distinct() %>% 
+  pull("Disease")
+
+# How many pages to consider?
+num_pages <- 8
+plot_list <- purrr::map(1:num_pages, ~ plot_boxplots(df, disease_list[interval(.x, number_of_pages = num_pages)]))
+
+pdf(file.path(wd, "Figure_S3.pdf"), height=10, width=7)
+purrr::walk(plot_list, print)
+dev.off()
+
+
+```
+
+# Supplemental Table
+In addition to the graph, we also output a table (Table S3) summarizing this information. This requires a fair amount of data shaping, however.
+```{r}
+
+# pvalues are by disease, gene
+pvalues <- df %>%
+  dplyr::group_by(Disease, `Immune-related Genes`) %>%
+  dplyr::summarize(
+    pvalue = format.pval(t.test(`Gene Expression` ~ `RSI`)$p.value,  digits=3)
+   )
+# Summaries are by disease, gene, RSI
+gene_summary <- df %>%
+  dplyr::group_by(Disease, RSI, `Immune-related Genes`) %>%
+  dplyr::summarize(
+    summary = sprintf("%5.2f (%3.2f)", 
+                      mean(`Gene Expression`), 
+                      sd(`Gene Expression`))) %>%
+  dplyr::ungroup()
+
+
+# Combine for the final table: Disease, marker1_hi, marker1_lo, marker1_p value, ...
+output_table <- gene_summary %>%
+  tidyr::pivot_wider(names_from = "RSI", values_from = "summary") %>%
+  dplyr::left_join(pvalues, by = c("Disease","Immune-related Genes")) %>%
+  dplyr::rename(
+    `RSI LO` = LO,
+    `RSI HI` = HI,
+    `p value` = pvalue
+  )
+
+# Write an excel version and word table version
+openxlsx::write.xlsx(output_table, file = file.path(wd, "Supplemental Table 3.xlsx"), overwrite=TRUE)
+flextable::save_as_docx(flextable::flextable(output_table) %>% 
+                          flextable::autofit() %>% 
+                          flextable::theme_booktabs(), 
+                        path = file.path(wd, "Supplemental Table 3.docx"))
+
+```
+
+<!---
+ATTENTION: The below text should remain at the bottom of your markdown
+as it provides tables about the runtime environment. You should leave
+everything from the start of this paragraph down at the end of the 
+document.
+--->
+\newpage
+# Session Information
+The information in this section is included in the report to facilitate reproducible research. The specific environment under which the code was run is detailed. 
+```{r session-information, echo=FALSE, results='asis'}
+dsreportr::print_session_information()
+```

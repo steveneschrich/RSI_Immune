@@ -1,0 +1,122 @@
+---
+title: "Project RSI_Immune: PCA CIBERSORT Samples"
+shorttitle: "RSI_Immune"
+project: 
+srpt_number: 
+version: "`r CosmosReportTemplates::git_tag()`"
+author: 'Steven Eschrich'
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+investigators:
+  - name: "Daniel Grass"
+  - name: "Javier Torres-Roca"
+project_team:
+analysis_team:
+analysis_contact:
+organization: 
+output:
+  CosmosReportTemplates::bbsr_article_pdf: default
+  word_document: default
+  pdf_document: default
+  html_document: default
+toc: yes
+---
+
+
+# Overview
+The goal of this analysis is to generate a PCA of samples for the CIBERSORT results.
+
+CIBERSORT is an algorithm for estimate immune cell fractions.
+
+
+```{r setup}
+library(ggplot2)
+library(ggrepel)
+library(ggpubr)
+```
+
+
+```{r}
+
+cibersort<-readRDS(file="../../data.derived/cibersort_scores_rel.RDS")
+colnames(cibersort)<-sub("_REL$","",colnames(cibersort))
+cibersort<-cibersort[,1:22]
+cell_type_mapping<-read.table(file="../../data.raw/cell_type_map.txt",row.names=1,header=T,stringsAsFactors = FALSE,sep="\t",quote="")
+cell_type_classification<-read.table(file="../../data.raw/CellTypeClassification.txt",header=T,row.names=1,stringsAsFactors = FALSE)
+result_table<-readRDS(file="../../data.derived/result_table.RDS")
+```
+
+```{r}
+pca<-prcomp(cibersort,scale.=T)
+
+
+```
+
+```{r}
+cairo_pdf(file="Figure_S5_PCA_CIBERSORT.pdf",height=8.5,width=11)
+gdf<-data.frame(x=pca$x[,1],y=pca$x[,2],
+                rsi=result_table$RSI, immune=result_table$ImmuneScore,
+                stringsAsFactors = FALSE)
+var<-100*(pca$sdev^2/sum(pca$sdev^2))
+
+g_a<-ggplot(gdf,aes(x=x,y=y, fill=rsi)) + 
+  geom_point(size=4, shape=21,color="black") +
+  theme_bw() +
+  xlab(sprintf("t[1] (%3.1f%%)",var[1])) +
+  ylab(sprintf("t[2] (%3.1f%%)",var[2])) +
+  theme(text=element_text(
+        family="Arial Unicode MS")) +
+  coord_fixed() +
+  scale_fill_gradientn(colors=c(
+  "#0005C2",
+  "#002CFF",
+  "#00ECFF",
+  "#00FFF7",
+  "#5FFF82",
+  "#B7FF24",
+  "#F6FF03",
+  "#FFE003",
+  "#FF5301",
+  "#B30001"
+  ),
+  values=c(0,0.2,0.25,0.35,0.44,0.55,0.6,0.65,0.75,1)
+)
+    
+
+
+g_b<-ggplot(gdf,aes(x=x,y=y, fill=immune)) + 
+  geom_point(size=4, shape=21, color="black") +
+  theme_bw() +
+  xlab(sprintf("t[1] (%3.1f%%)",var[1])) +
+  ylab(sprintf("t[2] (%3.1f%%)",var[2])) +
+ theme(text=element_text(
+        family="Arial Unicode MS")) +
+  coord_fixed() +
+  scale_fill_gradientn(colors=c(
+  "#0005C2",
+  "#002CFF",
+  "#00ECFF",
+  "#00FFF7",
+  "#5FFF82",
+  "#B7FF24",
+  "#F6FF03",
+  "#FFE003",
+  "#FF5301",
+  "#B30001"
+  ),
+  values=c(0,0.2,0.25,0.35,0.44,0.55,0.6,0.65,0.75,1)
+  #c(min(gdf$immune)+c(0,0.2,0.25,0.35,0.44,0.55,0.6,0.65,0.75,1)*diff(range(gdf$immune)))
+)
+
+fig6<-ggarrange(plotlist=list(g_a,g_b),ncol=2,nrow=1)
+
+annotate_figure(fig6,
+                bottom=text_grob(" ",face="bold",size=60),
+                fig.lab="Extended Data Figure 5\n",
+                fig.lab.pos="bottom.left"
+                )
+dev.off()
+
+```
+```{r session.info.table,results='asis',echo=FALSE}
+CosmosReportTemplates::print_session_information()
+```

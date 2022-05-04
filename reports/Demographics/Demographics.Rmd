@@ -1,0 +1,281 @@
+---
+# The report title block contains all of this information, although
+# if they are missing they are excluded. Note that running_title is not
+# included, but is part of the header of the rest of the report.
+title: "Title of the Report"
+running_title: ""
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+project: ""
+srpt_number:
+version: 1.0
+investigators:
+  - name: ""
+  - name: ""
+project_team:
+analysis_contact:
+report_author: ""
+analysis_team:
+organization: "MCC Biostatistics & Bioinformatics"
+
+# A banner will run across the top page. For template packages,
+# you can use dsreportr::banner("mcctemplates::bbsr_pdf") or whatever
+# template string is used in the output block. Or name your own
+# image file. Note the width option allows the image to be stretched,
+# which may not be your intent.
+banner: "`r dsreportr::banner('mcctemplates::bbsr_pdf')`"
+banner_width: 5.5in
+
+# Output specific options. Note that this skeleton only really applies
+# to a specific template.
+output:
+  mcctemplates::bbsr_pdf:
+    latex_engine: pdflatex
+    keep_tex: false
+    
+# General settings for the report. Many of these settings are defaulted
+# and not always needed but can be overridden if desired.
+toc: yes
+toc_depth: 2
+number_sections: true
+fontsize: 11pt
+geometry:
+  - margin=1in
+  - top=1in
+  - bottom=1in
+  - footskip=0.5in
+  
+# This is a brief statement of the report purpose, etc that would be
+# available at the outset.
+abstract: 
+
+# These settings are extras, but I'm not sure they are valid.
+colorlinks: false
+urlcolor: "blue"
+linkcolor: "cyan"
+citecolor: "gray"
+toccolor: "cyan"
+
+---
+
+# Overview
+The large TCC cohort includes many different tissue types with some limited clinical information (de-identified due to the nature of the study). This analysis provides a "table one" summary of the cohort, by disease, etc.
+
+```{r setup}
+library(magrittr)
+
+result.table<-readRDS(file.path(here::here(), "data.derived","result_table.RDS"))
+patient_data <- readRDS(file=file.path(here::here(), "data.derived","patient_data.rds"))
+graph_details<-read_excel(file.path(here::here(), "data.raw","Graph_Colors_Shapes.xlsx"))
+graph_map<-graph_details$tissue_abbreviations
+
+# Merge patient data and result.table
+match_fields<-function(f1, f2) {
+  stringr::str_detect(f1, stringr::fixed(f2, ignore_case=TRUE))
+}
+patient_data %>%
+  dplyr::group_by(BARCODE) %>%
+  filter(stringr::str_detect(`Primary Site`, stringr::fixed(`Primary_SOO_Conformed`, ignore_case=TRUE)))
+foo<-result.table %>% 
+  dplyr::left_join(patient_data, by=c("BARCODE.1"="BARCODE"))
+  
+```
+
+# Investigating patient data
+The patient data needs a little investigation before joining. This occurs below.
+
+How many barcodes in result.table are in the patient data in the first place. The below code generates
+9486, which is not the same size as the result.table. So there are barcodes in result.table not in patient information.
+```{r}
+patient_data %>% 
+  dplyr::select(BARCODE) %>% 
+  dplyr::distinct() %>% 
+  dplyr::inner_join(result.table, by=c("BARCODE"="BARCODE.1")) %>%
+  dplyr::count()
+```
+
+The next problem is that there are duplicate entries for barcodes in the patient data. This is because the cancer registry data is different (e.g., they had different diseases over time) and the barcode is not explicitly linked (here) to the specific disease. However, we want the age at diagnosis so somehow we have to find the specific disease.
+
+First, how many duplicates are we talking about? There are not many in extreme cases, but in there are 1648 pairs. That is too much to manually curate.
+```{r}
+patient_data %>% 
+  dplyr::group_by(BARCODE) %>%
+  dplyr::count(name = "Number of replicates") %>%
+  dplyr::group_by(`Number of replicates`) %>%
+  dplyr::count()
+
+```
+
+One approach would be to try and find the "Primary_SOO_Conformed", that is site of origin in the cancer registry primary site field. How much would it filter down and how much would we lose?
+
+Doing this, we get 6338 matches. Out of what we know are 9486 barcodes in the patient data. 
+```{r}
+
+matches_it<-function(x,y) {
+  if (length(x) > 1) {
+    matches<-stringr::str_detect(
+                     x, 
+                     stringr::fixed(y, ignore_case=TRUE)
+    )
+    matches
+  } else {
+    TRUE
+  }
+                
+}
+target_data <- patient_data %>%
+  dplyr::group_by(BARCODE) %>%
+  dplyr::filter(matches_it(`Primary Site`, `Primary_SOO_Conformed`)) %>%
+  dplyr::filter(n() == 1) %>%
+  dplyr::ungroup() 
+  
+
+ #   if ( n() > 1) {
+#                   matches<-stringr::str_detect(
+#                     `Primary Site`, 
+#                     stringr::fixed(`Primary_SOO_Conformed`, ignore_case=TRUE)
+#                    )
+#                
+#                else
+#                  TRUE
+#      ) %>%
+  dplyr::ungroup() %>%
+  dplyr::distinct(`BARCODE`) %>%
+  dplyr::count()
+```
+
+
+Looking at this closer.
+```{r}
+counts <- patient_data %>%
+  dplyr::group_by(BARCODE) %>%
+  dplyr::mutate(`Primary Site`=ifelse(is.na(`Primary Site`), "", `Primary Site`)) %>%
+  mutate(matched = stringr::str_detect(`Primary Site`, stringr::fixed(`Primary_SOO_Conformed`, ignore_case=TRUE))) %>%
+
+  dplyr::group_by(BARCODE, matched) %>%
+  dplyr::count(name  = "Number of replicates") %>%
+  dplyr::mutate(numtrue = length(which(`matched`)))
+
+# There are 0 multiple matches for the string, a good sign.
+counts %>% dplyr::filter(numtrue>1) %>% dplyr::count()
+```
+
+How many barcodes have a match in tissue (Num with a true) - (should agree with above). Yes, 6338 is the same as above.
+```{r}
+counts %>% 
+  dplyr::filter(numtrue>0) %>% 
+  dplyr::ungroup() %>%
+  dplyr::count()
+  
+```
+
+What are we missing? The things that have no numtrues, are they duplicates or singletons?
+
+There are 3148 total barcodes with no match. That's right, since 3148+6338 is the total (9486). Interesting, there were 668 NA amatches,  since the CR SOO was NA which I transformed to "".
+```{r}
+counts %>%
+  dplyr::group_by(BARCODE) %>%
+  dplyr::summarize(amatch=any(matched),
+                   totalreplicates = sum(`Number of replicates`)) %>%
+  dplyr::filter(!amatch) %>%
+  dplyr::count()
+
+
+
+
+```
+
+```{r}
+counts %>%
+  dplyr::filter(`Number of replicates` == 1) %>%
+  dplyr::filter(numtrue==0) %>%
+  dplyr
+
+```
+
+# Demographics Summary
+In conclusion, there are many samples for which multiple cancer registry entries match and the unique information is not evident. Therefore, we will use the following approach:
+
+- Single match, no change
+- Multiple matches, exclude
+- Missing data, exclude
+
+```{r}
+
+combined_data<- result.table %>%
+  dplyr::inner_join(target_data, by=c("BARCODE.1"="BARCODE")) %>%
+  dplyr::mutate(`Age At Diagnosis`=as.numeric(`Age At Diagnosis`)) %>%
+  dplyr::inner_join(graph_details %>% dplyr::select(SOO_Merged, tissue_abbreviations), by = "SOO_Merged")
+
+
+summary_tables <- combined_data %>% 
+  dplyr::group_by(`SOO_Merged`) %>%
+  dplyr::summarize(foo =   list(
+    gtsummary::tbl_summary(cur_data_all(),
+                           type = "Age At Diagnosis" ~ "continuous2",
+                           include = c("RSI","gender","Race","Age At Diagnosis")) %>%
+                           gtsummary::modify_header(label = "**{cur_group()}**")
+    )
+  
+  )
+  
+data_table <- combined_data %>%
+  dplyr::filter(!is.na(`SOO_Merged`)) %>%
+  dplyr::group_by(`tissue_abbreviations`) %>%
+  dplyr::summarize(
+    N = n(),
+    rsi_summary = sprintf("%1.2f (%1.2f, %1.2f)", median(`RSI`), quantile(`RSI`, probs=0.25),
+                                         quantile(`RSI`, probs=0.75)),
+    gender_summary_M = sprintf("%4d (%3.1f%%)", 
+                               length(which(`gender`=="M")), 
+                               100*length(which(`gender`=="M"))/N),
+    gender_summary_F = sprintf("%4d (%3.1f%%)",
+                               length(which(`gender`=="F")),
+                               100*length(which(`gender`=="F"))/N),
+    age_summary = sprintf("%3.0f (%1.2f, %1.2f)", median(`Age At Diagnosis`, na.rm=T),
+                          quantile(`Age At Diagnosis`, probs=0.25, na.rm=T),
+                          quantile(`Age At Diagnosis`, probs=0.75, na.rm=T))
+                     
+  ) %>%
+  dplyr::rename("Cancer"="tissue_abbreviations", RSI=`rsi_summary`,
+                "M"="gender_summary_M",
+                "F"="gender_summary_F",
+                "Age At Diagnosis" = "age_summary"
+  )
+
+
+
+
+
+ft <- flextable::flextable(data_table) %>%
+  flextable::add_header_row(values=c("","Gender",""),colwidths=c(3,2,1))%>% 
+  flextable::theme_booktabs() %>% 
+  flextable::autofit() %>% 
+  flextable::align(i=1,j=4,part="header",align="center") 
+
+flextable::save_as_docx(ft, path = file.path(here::here(), 
+                                             "reports","Demographics","Supplemental Table 2.docx"),
+                        pr_section = officer::prop_section(
+                          officer::page_size(orient = "landscape",
+                                             width = 8.3, height = 11.7),
+                          type = "continuous",
+                          page_margins = officer::page_mar(bottom=0.5, top=0.5, right=0.5, left=0.5)
+                        )
+)
+
+openxlsx::write.xlsx(data_table, file = file.path(here::here(), "reports","Demographics","Supplemental Table 2.xlsx"))
+```
+Total: 8321, some dropped
+Age: 668 samples missing age at diagnosis.
+  
+<!---
+ATTENTION: The below text should remain at the bottom of your markdown
+as it provides tables about the runtime environment. You should leave
+everything from the start of this paragraph down at the end of the 
+document.
+--->
+\newpage
+# Session Information
+The information in this section is included in the report to facilitate reproducible research. The specific environment under which the code was run is detailed. 
+```{r session-information, echo=FALSE, results='asis'}
+dsreportr::print_session_information()
+```

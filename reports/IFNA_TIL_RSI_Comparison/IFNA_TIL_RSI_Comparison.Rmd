@@ -1,0 +1,562 @@
+---
+title: "Project X: Data Analysis"
+shorttitle: "Short Project"
+project: "Project"
+srpt_number: 007
+version: "`r CosmosReportTemplates::git_tag()`"
+author: ''
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+investigators:
+  - name: ""
+  - name: ""
+project_team:
+analysis_team:
+analysis_contact:
+organization: "MCC Biostatistics & Biofinformatics"
+output:
+  CosmosReportTemplates::bbsr_pdf: default
+toc: yes
+---
+
+
+# Overview
+The goal is to create a visualization that relates TCC data to a number of outcomes simultaneously. The variables include
+
+- Tissue of Origin
+- TIL level
+- RSI
+- IFN-A signaling
+
+The best way to do this is via a bubble plot, inspired by Figure 2A in  https://www.sciencedirect.com/science/article/pii/S2211124716317090#mmc2
+
+In bubble plots (or any plots) there are a couple of dimensions to represent data:
+
+- X
+- Y
+- color
+- size of points
+- shape of points
+- outline of points (this can include colors as well, can it include shapes?)
+
+Therefore, if we can match up relationships among 4 variables it should be possible to represent them in 6 dimensions. 
+
+For sure, Tissue of Origin and TIL is represented as X/Y coordinates. What we want of the rest is
+
+- TO/TIL % enrichment of high-IFN in high-TIL
+- TO/TIL % enrichment of low-RSI in high-TIL
+- Statistical significance (q<0.05) for IFN
+- Statistical significance (q<0.05) for RSI
+
+There is a natural pairing of two continuous (enrichment) and two binary (stats) outcomes. There is not necessarily a natural pairing among the remaining four dimensions.
+
+- Outline/shape: outline is yes/no, shape could be 1/2.
+- Color can be continuous (or discrete), size can be continuous (or discrete)
+
+The other option is to have four values for statistical significance: not A and not B, A and not B, B and not A, A and B. This is not as useful since similarities between levels and comparisons across neighboring cells would be lost if, for instance, they have difference shapes. They may both represent significance in one finding but not be the same.
+
+If the above is to work, you could do a border. Meaning, yellow = A, blue=B, green=A+B.
+Can you do a color and a shape? Meaning not A and not B is no border, A is red, B is dashed. So red-dashed is both. dashed black(?) is B, solid red is A.
+
+The idea for this figure was inspired by
+https://ars.els-cdn.com/content/image/1-s2.0-S2211124716317090-gr2_lrg.jpg
+
+
+```{r setup}
+suppressPackageStartupMessages({
+  library(readxl)
+  library(dplyr)
+  library(tibble)
+  library(Biobase)
+  library(ggplot2)
+  library(circlize)
+})
+
+#' Perform fisher exact test with error checking
+#' 
+#' The fisher exact test does not handle the case when
+#' only one column of a table is present. Since we are
+#' automatically computing fisher tests, some contingency
+#' tables may not have two dimensions. Check this and
+#' return p=1 in this case.
+#'
+#' @param x Contingency table to test
+#'
+#' @return A pvalue corresponding to fisher.test
+#' 
+#'
+careful_fisher<-function(x) {
+  if (ncol(x) < 2 || nrow(x) < 2)
+    1
+  else
+    fisher.test(x)$p.value
+  
+}
+
+# Fonts are a pain
+library(extrafont)
+loadfonts(device = "pdf")
+
+source("../../src/grid.half_circle.R")
+```
+
+
+
+First task is to read in the necessary data.
+
+```{r data-loading}
+
+gsva_results<-readRDS("../../data.derived/gsva_results.RDS") %>%
+  tibble::as_tibble(rownames="HALLMARK")
+result_table<-readRDS(file="../../data.derived/result_table_with_iRIS.RDS") %>%
+  tibble::as_tibble(rownames="BARCODE") %>%
+  filter(!is.na(SOO_Merged))
+
+graph_config<-read_excel("../../data.raw/Graph_Colors_Shapes.xlsx")
+source("../../data.raw/TIL_Mapping.R")
+
+```
+
+
+
+Compute the necessary statistics on it.
+```{r compute-stats}
+# Create the initial table with everything
+mdf <- gsva_results %>%
+  # Currently, we only want one hallmark ssGSEA score.
+  dplyr::filter(HALLMARK=="HALLMARK_INTERFERON_ALPHA_RESPONSE") %>%
+  # Move HALLMARK to rownames for the transpose (next)
+  tibble::column_to_rownames("HALLMARK") %>%
+  # The data is currently in sample-in-column format, transpose it.
+  t() %>%
+  # Move rownames into the tibble
+  tibble::as_tibble(rownames="BARCODE") %>%
+  # Add in results (CIBERSORT, etc).
+  dplyr::inner_join(result_table, by=c("BARCODE"="BARCODE")) %>%
+  # Add in disease labels
+  dplyr::left_join(graph_config, by=c("SOO_Merged"="SOO_Merged")) %>%
+  # Calculate per tissue type IFNA HI/LO categories
+  dplyr::group_by(SOO_Merged) %>%
+  # Add computation of hi/lo INFA (based on median threshold).
+  dplyr::mutate(IFNA_Category = 
+                  ifelse(HALLMARK_INTERFERON_ALPHA_RESPONSE > 
+                           median(HALLMARK_INTERFERON_ALPHA_RESPONSE),
+                         "HI","LO")) %>%
+  # Reset groupby
+  dplyr::ungroup()
+
+# This provides the mean ImmuneScore by tissue for arranging the visualizations.
+immune_score_by_soo <- mdf %>%
+  group_by(tissue_abbreviations) %>%
+  summarize(MeanImmuneScore = mean(ImmuneScore)) %>%
+  arrange(desc(MeanImmuneScore))
+  
+
+# Next, select key variables and pivot for easier creation of the stats.
+tmdf<-mdf %>%
+  # Subset to key variables rather than bringing everything along.
+  dplyr::select(SOO_Merged, tissue_abbreviations, RSI_Category_Merged, 
+                RSI, HALLMARK_INTERFERON_ALPHA_RESPONSE, IFNA_Category, ImmuneScore,
+                tidyselect::starts_with("NCA_") ) %>%
+  # This rearranges the many NCA (cibersort) columns to one NCA observation per row.
+  tidyr::pivot_longer(cols=starts_with("NCA_"), names_to="Cibersort_Name", values_to="TIL_Value") %>%
+  # Add in pretty TIL names
+  dplyr::left_join(TIL_Mapping, by=c("Cibersort_Name"="Cibersort_Normalized_Categorization"))
+
+# Calculate stats
+TIL_Enrichment <- tmdf %>%
+  # Group by disease and TIL
+  dplyr::group_by(tissue_abbreviations, TIL_Name, TIL_Display) %>%
+  # Calculate statistics by disease/TIL group
+  dplyr::summarize(
+    RSI_TIL_Count = sum(RSI_Category_Merged == "LOW" & TIL_Value=="HI"),
+    RSI_TIL_Enrichment = RSI_TIL_Count/n(),
+    RSI_TIL_Enrichment_p = careful_fisher(table(RSI_Category_Merged, TIL_Value)),
+    IFNA_TIL_Count = sum(IFNA_Category == "HI" & TIL_Value=="HI"),
+    IFNA_TIL_Enrichment = IFNA_TIL_Count / n(),
+    IFNA_TIL_Enrichment_p = careful_fisher(table(IFNA_Category, TIL_Value)),
+    .groups="drop"
+    ) %>%
+  # Adjust for multiple testing across all RSI (or IFNA) enrichment tests.
+  dplyr::mutate(
+    RSI_TIL_Enrichment_q = p.adjust(RSI_TIL_Enrichment_p, method="fdr"),
+    IFNA_TIL_Enrichment_q = p.adjust(IFNA_TIL_Enrichment_p, method="fdr")
+    
+  )
+
+
+```
+
+
+At this point, TIL_Enrichment is the table to visualize.
+```{r}
+rio::export(TIL_Enrichment %>% dplyr::select(tissue_abbreviations, TIL_Name, RSI_TIL_Count, RSI_TIL_Enrichment, RSI_TIL_Enrichment_p, RSI_TIL_Enrichment_q, IFNA_TIL_Count, IFNA_TIL_Enrichment, IFNA_TIL_Enrichment_p, IFNA_TIL_Enrichment_q), file="TIL_Enrichment.xlsx")
+```
+
+# Visualization Option 1: traditional bubble plot
+The first approach is a bubble plot arranged in a grid by tissue/TIL. Currently, size is RSI enrichment and color is IFNA enrichment.
+```{r eval=FALSE}
+
+
+
+# Create variables for plotting that are factors ordered by another variable. This
+# ensures that the plot is ordered in each dimension correctly.
+plot_table <- TIL_Enrichment %>%
+  # Create tissue labels as a factor in the order of ImmuneScore
+  mutate(tissue_abbreviations_by_immune_score = factor(
+    tissue_abbreviations,
+    levels = # For graphing, we need a list of tissues ordered by immune score.
+              mdf %>%
+                dplyr::group_by(tissue_abbreviations) %>%
+                dplyr::summarize(immune_score=mean(ImmuneScore)) %>%
+                # NB: With ggplot, we need tissues from lowest to highest.
+                arrange(immune_score) %>%
+                dplyr::pull("tissue_abbreviations")
+    )
+  ) %>%
+  mutate(TIL_Display_by_significant = factor(
+              unlist(TIL_Display),
+              levels = 
+             # For TIL list, order by the number of significant in IFNA/RSI
+             TIL_Enrichment %>% 
+                dplyr::group_by(TIL_Display) %>% 
+                dplyr::summarize(total_significant = 
+                            sum(IFNA_TIL_Enrichment_q < 0.05 & RSI_TIL_Enrichment_q < 0.05)) %>%
+                dplyr::arrange(desc(total_significant)) %>%
+                dplyr::pull("TIL_Display") %>%
+                unlist()
+          )
+  ) 
+  
+
+bubbleplot<-ggplot(plot_table, 
+                   aes(x=tissue_abbreviations_by_immune_score, y=TIL_Display_by_significant)) +
+   geom_point(aes(fill=IFNA_TIL_Enrichment_q<0.05, size=RSI_TIL_Enrichment_q<0.05), shape=21) +
+   theme_bw() +
+   scale_fill_manual(values = c("FALSE"="blue","TRUE"="red"), 
+                     labels = c("FALSE"="q >= 0.05","TRUE"="q < 0.05")) +
+   scale_size_discrete(labels=c("FALSE"="q >= 0.05", "TRUE"="q < 0.05")) +
+   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+         axis.title.x=element_blank(),
+         axis.title.y=element_blank(),
+         text=element_text(family="Noto Serif")
+    )  +
+  labs(fill = "IFNA-TIL\nEnrichment",
+       size = "RSI-TIL\nEnrichment")
+ 
+cairo_pdf(file = "IFNA_TIL_RSI_Comparison_Option_1.pdf",height=8, width=10)
+print(bubbleplot)
+dev.off()
+       
+```
+
+
+# Visualization Option 2: ComplexHeatmap
+Another option is to use a heatmap, with a custom routine to draw the elements of the heatmap. If we do this, we will encode the statistical significant (q<0.05) for both options in a single two-digit string "01","11". Then when we do the heatmap, we can parse this apart and draw whatever we want.
+
+
+Data shaping below.
+```{r complex-heatmap-data-shaping}
+plot_table <- TIL_Enrichment %>%
+  mutate(RSI_TIL_Significant = RSI_TIL_Enrichment_q<0.05,
+         IFNA_TIL_Significant = IFNA_TIL_Enrichment_q<0.05,
+         significance_summary = sprintf("%s%s",
+                                        ifelse(RSI_TIL_Significant, "1", "0"),
+                                        ifelse(IFNA_TIL_Significant, "1", "0")
+         )
+         
+  ) %>%
+  dplyr::select(tissue_abbreviations, TIL_Display, significance_summary) %>%
+  dplyr::mutate(TIL_Display=unlist(TIL_Display))
+
+plot_matrix<-tidyr::pivot_wider(plot_table, 
+                                names_from=TIL_Display, 
+                                values_from = significance_summary) %>%
+  tibble::column_to_rownames(var="tissue_abbreviations") %>%
+  t()
+```
+
+
+```{r complex-heatmap-option-1}
+# This is a custom drawing function for ComplexHeatmap, within each cell.
+# The parameters are defined from:
+# https://jokergoo.github.io/ComplexHeatmap-reference/book/a-single-heatmap.html#cell-fun
+#
+plot_circle_data<-function(j, i, x, y, width, height, fill="black", col="white") {
+  
+  significant_string<-stringr::str_split(plot_matrix[i, j],"")[[1]]
+  grid.half_circle(x, y, r = min(width, height)/2, which = "left",
+                   gp = gpar(col=col,fill = ifelse(significant_string[1] == "1",
+                                                       fill[1],"white")))
+  
+  grid.half_circle(x, y, r = min(width, height)/2, which = "right",
+                   gp = gpar(col=col,fill = ifelse(significant_string[2] == "1", 
+                                                       fill[min(length(fill), 2)], "white")))
+  
+}
+p<-Heatmap(plot_matrix,
+        cluster_rows = FALSE,
+        cluster_columns = FALSE,
+        row_names_gp = gpar(fontsize = 8),
+        column_names_gp = gpar(fontsize = 8),
+        rect_gp = gpar(type = "none"),
+        cell_fun = function(j, i, x, y, width, height, fill="black", col="white") {
+          # NB: This could be fixed if I set the color function correctly.
+          plot_circle_data(j,i,x,y,width,height, fill="black", col="black")
+        },
+        row_order = order(
+          apply(plot_matrix, 1, function(x) {
+            sum(stringr::str_count(x, "1"))
+          })
+        ),
+        column_order = order(
+          apply(plot_matrix, 2, function(x) {
+            sum(stringr::str_count(x, "1"))
+          })
+        ),
+        show_heatmap_legend = FALSE
+)
+
+
+lgd <- Legend(labels=c("Both","RSI vs IC\nq<0.05\n","IFN\u03B1 vs IC\nq<0.05\n","Neither"), title="Significance",
+              title_gp = gpar(fontsize = 8), 
+              labels_gp = gpar(fontsize = 8), 
+              graphics = list(
+                "Both" = function(x, y, w, h) {
+                          grid.half_circle(x, y, r = min(w, h)/2, which = "right",
+                                           gp=gpar(fill="black",col="black"))
+                          grid.half_circle(x, y, r = min(w, h)/2, which = "left",
+                                           gp=gpar(fill="black",col="black"))
+                  
+                },
+                "RSI vs IC\nq<0.05" = function(x, y, w, h) {
+                          grid.half_circle(x, y, r = min(w, h)/2, which = "left",
+                                           gp=gpar(col="black",fill="black", lwd=0.5))
+                },
+                "IFN\u03B1 vs IC\nq<0.05" = function(x, y, w, h) {
+                          grid.half_circle(x, y, r = min(w, h)/2, which = "right",
+                                           gp=gpar(fill="black",col="black", lwd=0.5))
+                },
+                "Neither" = function(x, y, w, h) { 
+                          grid.half_circle(x, y, r = min(w, h)/2, which="right",
+                                           gp = gpar(col="white", col="black"))
+                })
+)
+
+
+
+cairo_pdf(filename="IFNA_TIL_RSI_Comparison_Option_2.pdf",width=10,height=5)
+draw(p, heatmap_legend_list = lgd)
+dev.off()
+
+
+
+  
+```
+## Variations of ComplexHeatmap
+The visualization looks pretty good. Can we clean these up more so that they are publication-ready. Try a couple of heatmap options to see which one looks best.
+```{r complex-heatmap-option-2-1}
+
+# Circles around the individual points
+p<-Heatmap(plot_matrix,
+        cluster_rows = FALSE,
+        cluster_columns = FALSE,
+        row_names_gp = gpar(fontsize = 8),
+        column_names_gp = gpar(fontsize = 8),
+        rect_gp = gpar(type = "none"),
+        cell_fun = function(j, i, x, y, width, height, fill="black", col="white") {
+          plot_circle_data(j,i,x,y,width,height, fill="black", col="black")
+        },
+        #show_heatmap_legend = FALSE,
+        row_order = order(
+          apply(plot_matrix, 1, function(x) {
+            sum(stringr::str_count(x, "1"))
+          })
+        ),
+        column_order = order(
+          apply(plot_matrix, 2, function(x) {
+            sum(stringr::str_count(x, "1"))
+          })
+        ),
+        show_heatmap_legend = FALSE
+)
+
+cairo_pdf(filename="IFNA_TIL_RSI_Comparison_Option_2.1.pdf",width=10,height=5)
+draw(p, heatmap_legend_list = lgd)
+dev.off()
+```
+Color choices are important. The black and white are a bit dull, Anders suggested a color palette. Also I've integrated a nicer legend.
+
+```{r complex-heatmap-option-2-2}
+# Multi-color
+# From Anders:
+#  [188.6720   60.1600   41.2160] , [ 0  115.4560  194.8160]
+
+
+
+p<-Heatmap(plot_matrix,
+        cluster_rows = FALSE,
+        cluster_columns = FALSE,
+        row_names_gp = gpar(fontsize = 8),
+        column_names_gp = gpar(fontsize = 8),
+        rect_gp = gpar(type = "none"),
+        cell_fun = function(j, i, x, y, width, height, fill="black", col="white") {
+          plot_circle_data(j,i,x,y,width,height, fill=c("#BD3C29","#0073C3"), col="black")
+        },
+        #show_heatmap_legend = FALSE,
+        row_order = order(
+          apply(plot_matrix, 1, function(x) {
+            sum(stringr::str_count(x, "1"))
+          })
+        ),
+        column_order = order(
+          apply(plot_matrix, 2, function(x) {
+            sum(stringr::str_count(x, "1"))
+          })
+        ),
+        show_heatmap_legend = FALSE
+)
+
+lgd <- Legend(labels=c("RSI vs IC\nq<0.05\n","IFN\u03B1 vs IC\nq<0.05\n"), title="Significance",
+              title_gp = gpar(fontsize = 8), 
+              labels_gp = gpar(fontsize = 8), 
+              graphics = list(
+                "RSI vs IC\nq<0.05" = function(x, y, w, h) {
+                          grid.half_circle(x, y, r = min(w, h)/2, which = "left",
+                                           gp=gpar(col="black",fill="#BD3C29", lwd=0.5))
+                },
+                "IFN\u03B1 vs IC\nq<0.05" = function(x, y, w, h) {
+                          grid.half_circle(x, y, r = min(w, h)/2, which = "right",
+                                           gp=gpar(fill="#0073C3",col="black", lwd=0.5))
+                }
+              )
+)
+cairo_pdf(filename="IFNA_TIL_RSI_Comparison_Option_2.2.pdf",width=10,height=5)
+draw(p, heatmap_legend_list = lgd)
+dev.off()
+```
+
+
+2021-08-10
+Per Daniel, a couple of tweaks:
+
+- Color palette: stay away from the red - blue in other figures.
+- Transpose so that tissues are in columns (labels on left) - DONE
+- Legend on right - DONE
+- Order tissues by immunescore (low immune on top)
+- Order columns by total number significant, most significant on bottom - DONE
+
+
+Light blue (RSI-TIL), purple (IFN-TIL) and maroon shade (full circle)?  Can look at palette in dip plots.
+ 
+
+For transposing, we create new objects (prepended with a t) to make it easier to understand.
+```{r complex-heatmap-option-3t}
+tplot_matrix<-t(plot_matrix)
+# This is a custom drawing function for ComplexHeatmap, within each cell.
+# The parameters are defined from:
+# https://jokergoo.github.io/ComplexHeatmap-reference/book/a-single-heatmap.html#cell-fun
+#
+tplot_circle_data<-function(j, i, x, y, width, height, fill="black", col="white") {
+  
+  significant_string<-stringr::str_split(tplot_matrix[i, j],"")[[1]]
+  grid.half_circle(x, y, r = min(width, height)/2, which = "left",
+                   gp = gpar(col=col,fill = ifelse(significant_string[1] == "1",
+                                                       fill[1],"white")))
+  
+  grid.half_circle(x, y, r = min(width, height)/2, which = "right",
+                   gp = gpar(col=col,fill = ifelse(significant_string[2] == "1", 
+                                                       fill[min(length(fill), 2)], "white")))
+  
+}
+
+
+
+#col_fun = colorRamp2(c(0, 5, 10), c("blue", "white", "red"))
+#ha = HeatmapAnnotation(foo = 1:10, col = list(foo = col_fun))
+
+# blue/blue
+#7b3294
+#c2a5cf\
+
+# Yellow/orange
+# 
+#fdae61
+#ffffbf
+
+# red/blue
+#"#BD3C29","#0073C3"
+
+pt<-Heatmap(tplot_matrix,
+        cluster_rows = FALSE,
+        cluster_columns = FALSE,
+        row_names_gp = gpar(fontsize = 8),
+        column_names_gp = gpar(fontsize = 8),
+        row_names_side = "left",
+        rect_gp = gpar(type = "none"),
+        cell_fun = function(j, i, x, y, width, height, fill="black", col="white") {
+          tplot_circle_data(j,i,x,y,width,height, fill=c("#BD3C29","#0073C3"), col="black")
+        },
+        
+
+        #show_heatmap_legend = FALSE,
+        row_order = (tibble(tissue_abbreviations = rownames(tplot_matrix)) %>%
+          left_join(immune_score_by_soo, by=c("tissue_abbreviations"="tissue_abbreviations")) %>%
+          pull(MeanImmuneScore) %>%
+          order()
+        ),
+        column_order = order(
+          apply(tplot_matrix, 2, function(x) {
+            sum(stringr::str_count(x, "1"))
+          }),
+          decreasing = TRUE
+        ),
+        left_annotation = rowAnnotation("Immune Score" = 
+                                  tibble(tissue_abbreviations = rownames(tplot_matrix)) %>%
+                                    left_join(immune_score_by_soo, 
+                                              by=c("tissue_abbreviations"="tissue_abbreviations")) %>%
+                                    pull(MeanImmuneScore),
+                                  
+                                  col = list("Immune Score" =
+                                               colorRamp2(c(min(immune_score_by_soo$MeanImmuneScore),
+                                                        median(immune_score_by_soo$MeanImmuneScore),
+                                                        max(immune_score_by_soo$MeanImmuneScore)),
+                                                   c("#ffffff","#c2a5cf","#7b3294"))
+                                             ),
+                                  annotation_name_gp = gpar(fontsize=8),
+                                  annotation_legend_param = list(
+                                    title_gp = gpar(fontsize = 8),
+                                    labels_gp = gpar(fontsize = 8)),
+                                  simple_anno_size = unit(0.2, "cm")
+                                  
+                                  ),
+        show_heatmap_legend = FALSE
+)
+
+lgd <- Legend(labels=c("RSI vs IC\nq<0.05\n","IFN\u03B1 vs IC\nq<0.05\n"), title="Significance",
+              title_gp = gpar(fontsize = 8), 
+              labels_gp = gpar(fontsize = 8), 
+              graphics = list(
+                "RSI vs IC\nq<0.05" = function(x, y, w, h) {
+                          grid.half_circle(x, y, r = min(w, h)/2, which = "left",
+                                           gp=gpar(col="black",fill="#BD3C29", lwd=0.5))
+                },
+                "IFN\u03B1 vs IC\nq<0.05" = function(x, y, w, h) {
+                          grid.half_circle(x, y, r = min(w, h)/2, which = "right",
+                                           gp=gpar(fill="#0073C3",col="black", lwd=0.5))
+                }
+              )
+)
+
+cairo_pdf(filename="IFN_TIL_RSI_Comparison_Option_3t.pdf",width=5,height=8)
+draw(pt, heatmap_legend_list = lgd, heatmap_legend_side="right")
+dev.off()
+
+cairo_pdf(filename="Figure_4C_IFN_IC_RSI_Comparison.pdf",width=5,height=8)
+draw(pt, heatmap_legend_list = lgd, heatmap_legend_side="right")
+dev.off()
+
+```
+
+```{r session.info.table, results='asis',echo=FALSE}
+CosmosReportTemplates::print_session_information()
+```

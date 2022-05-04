@@ -1,0 +1,108 @@
+---
+title: "Project RSI_Immune: Estimate Distributions"
+shorttitle: "RSI_Immune"
+project: 
+srpt_number: 
+version: "`r CosmosReportTemplates::git_tag()`"
+author: 'Steven Eschrich'
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+investigators:
+  - name: "Daniel Grass"
+  - name: "Javier Torres-Roca"
+project_team:
+analysis_team:
+analysis_contact:
+organization: 
+output:
+  CosmosReportTemplates::bbsr_article_pdf: default
+  word_document: default
+  pdf_document: default
+  html_document: default
+toc: yes
+---
+
+
+
+# Overview
+The goal is to show the distribution of ESTIMATE scores, and test for normality.
+
+```{r setup}
+library(ggplot2)
+library(ggpubr)
+library(nortest)
+```
+
+
+Load the estimate scores.
+```{r}
+estimate_scores<-readRDS(file="../../data.derived/estimate_scores.RDS")
+```
+
+Plot the stromal score, immune score and tumor purity. Show the mean/stdev/N/p value of Anderson-Darling
+
+```{r}
+
+
+plot_distribution<-function(x, title) {
+  
+  medianval<-median(x)
+  meanval<-mean(x)
+  stdevval<-sd(x)
+  n<-length(x)
+  p<-ad.test(x)$p.value
+  densityplot<-ggplot(data.frame(x),aes(x=x)) + 
+    geom_histogram(alpha=0.1,color="black",fill="black",bins=500) +
+    #ggtitle(title) +
+    theme_bw() +
+    ylab("Frequency") +
+    xlab(title) +
+    theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+
+  stats_table_data<-data.frame("median"=format(medianval,digits=3),
+                                "mean"=format(meanval,digits=3),
+                               "sd"=format(stdevval,digits=3),
+                               "N"=format(n),
+                               "AD p value"=format.pval(p,digits=3,eps="0.0001"),
+                               row.names=c(""),
+                               check.names=FALSE)
+                             
+
+  stats_table<-ggtexttable(stats_table_data, theme = ttheme(base_size=12))
+
+
+  ggarrange(densityplot, 
+            stats_table,
+            ncol=1,nrow=2,
+            heights=c(5,1))
+  
+}
+ 
+supplemental_figures_3<-list()
+for ( score in colnames(estimate_scores)) {
+  supplemental_figures_3[[score]]<-(plot_distribution(estimate_scores[,score],score))
+}
+
+pdf(file="Figure_S3_Estimate_Distributions.pdf",height=8.5,width=11)
+figure<-ggarrange(supplemental_figures_3[["StromalScore"]],
+          supplemental_figures_3[["ImmuneScore"]],
+          supplemental_figures_3[["TumorPurity"]],
+          supplemental_figures_3[["ESTIMATEScore"]],
+          ncol=2,
+          nrow=2,
+          labels="AUTO"
+) 
+
+annotate_figure(figure,
+                bottom=text_grob(" ",face="bold",size=60),
+                fig.lab="Extended Data Figure 3\n",
+                fig.lab.pos="bottom.left",
+                #fig.lab.face="bold",
+                #fig.lab.size=18
+                )
+
+dev.off()
+```
+
+```{r session.info.table,results='asis',echo=FALSE}
+CosmosReportTemplates::print_session_information()
+```

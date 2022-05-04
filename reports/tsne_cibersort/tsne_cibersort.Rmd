@@ -1,0 +1,69 @@
+---
+title: "Project X: Data Analysis"
+shorttitle: "Short Project"
+project: "Project"
+srpt_number: 007
+version: "`r CosmosReportTemplates::git_tag()`"
+author: ''
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+investigators:
+  - name: ""
+  - name: ""
+project_team:
+analysis_team:
+analysis_contact:
+organization: "MCC Biostatistics & Biofinformatics"
+output:
+  CosmosReportTemplates::bbsr_pdf: default
+toc: yes
+---
+
+
+# Overview
+The goal of this document is to address an analysis question within the project. Several of these analysis documents may exist to satisfy distinct questions that are being asked within the project.
+
+```{r setup}
+suppressPackageStartupMessages({
+  library(readxl)
+  library(Biobase)
+  library(Rtsne)
+  library(ggplot2)
+})
+```
+
+```{r eval=FALSE}
+result_table<-readRDS("../../data.derived/result_table_with_iRIS.RDS")
+tcc_cibersort<-ExpressionSet(assayData=t(result_table[,grep("_NCA",colnames(result_table))]),
+                             phenoData=AnnotatedDataFrame(result_table))
+saveRDS(tcc_cibersort, file="../../data.derived/tcc_cibersort.RDS")
+
+```
+
+```{r}
+tcc_cibersort<-readRDS(file="../../data.derived/tcc_cibersort.RDS")
+```
+
+```{r}
+
+purrr::walk(1:5, function(seed) {
+  purrr::walk(c(10,25,50,75,100,200,300,500), function(perplex) {
+    set.seed(seed)
+    tcc_tsne<-Rtsne(t(exprs(tcc_cibersort)), perplexity=perplex)
+    df<-data.frame(x=tcc_tsne$Y[,1],
+                y=tcc_tsne$Y[,2],
+                pData(tcc_cibersort),
+                stringsAsFactors = FALSE,
+                check.names=FALSE)
+    tsne_plot<-ggplot(df, aes(x=x,y=y,col=SOO_Merged)) +
+      geom_point() +
+      theme_bw() +
+      theme(legend.position="bottom")
+    ggsave(filename=sprintf("tsne_cibersort_s=%d_p=%d.pdf",seed,perplex), plot=tsne_plot)
+  })
+})
+
+```
+
+```{r session.info.table, results='asis',echo=FALSE}
+CosmosReportTemplates::print_session_information()
+```

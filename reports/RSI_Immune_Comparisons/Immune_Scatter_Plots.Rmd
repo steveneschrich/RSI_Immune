@@ -1,0 +1,260 @@
+---
+title: "Project RSI_Immune: Immune_RSI_Scatter_Plots"
+shorttitle: "RSI_Immune"
+project: 
+srpt_number: 
+version: "`r CosmosReportTemplates::git_tag()`"
+author: 'Steven Eschrich'
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+investigators:
+  - name: "Daniel Grass"
+  - name: "Javier Torres-Roca"
+project_team:
+analysis_team:
+analysis_contact:
+organization: 
+output:
+  CosmosReportTemplates::bbsr_article_pdf: default
+  word_document: default
+  pdf_document: default
+  html_document: default
+toc: yes
+---
+
+```{r setup}
+library(readxl)
+library(grid)
+library(dplyr)
+library(GGally)
+library(ggpubr)
+```
+
+
+```{r load-data}
+
+graph_details<-rio::import(here::here("data.raw","Graph_Colors_Shapes.xlsx"))
+
+# Build result table with joined tissue abbreviations for printing.
+result.table<-rio::import(here::here("data.derived","result_table.RDS")) %>%
+  dplyr::filter(!is.na(SOO_Merged)) %>%
+  dplyr::left_join(graph_details %>% dplyr::select(SOO_Merged, tissue_abbreviations), by=c("SOO_Merged"="SOO_Merged"))
+
+
+```
+
+
+```{r plot-function}
+#' Plot Immune vs RSI values.
+#'
+#' Assuming a data frame with Immune score and RSI values, plot the two measures
+#' against each other. The option exists to subset which samples are graphed.
+#'
+#' @param df The data frame to extract RSI/Immune values from.
+#' @param which 
+#' @param main 
+#' @param col 
+#'
+#' @return
+#' @export
+#'
+#' @examples
+scatter_plot_immune_vs_rsi<-function(d, tissue) {
+  
+  # Subset observations
+  d <- d %>% 
+    dplyr::filter(tissue_abbreviations == tissue)
+  # Get graphing characteristics
+  graph_details<-rio::import(here::here("data.raw","Graph_Colors_Shapes.xlsx")) %>%
+    dplyr::filter(tissue_abbreviations == tissue) 
+    
+  # Calculate correlations
+  stats <- d %>%
+    dplyr::group_by(tissue_abbreviations) %>%
+    dplyr::summarize(
+      pearson_r = cor(RSI, ImmuneScore, method="pearson"),
+      spearman_r = cor(RSI, ImmuneScore, method="spearman")
+    )
+  
+  # Graphing                          
+  label_r<-paste0("r==",format(stats$pearson_r,digits=2))
+  label_rho<-paste0(expression(rho),"==",format(stats$spearman_r,digits=2))
+  
+  ret<-ggplot(d,aes(x=RSI, y=ImmuneScore)) + 
+    # Circles with black borders, colored by legend.
+    geom_point(fill=graph_details$color_unique, shape=21) + 
+    # Turn off too much decoration
+    theme_bw() +
+    # And gridlines
+    theme(panel.grid = element_blank()) +
+    # Pretty print the y axis
+    ylab("Immune Score") +
+    # Set the title as the tissue name
+    ggtitle(tissue) +
+    # Do a trend line
+    geom_smooth(method = lm, se = FALSE, col="red", formula = y ~ x) +
+    # Add the correlation values
+    annotate("text", x = 1, y = 3500, label=label_r, parse=TRUE, hjust="inward",size=3) + 
+    annotate("text", x = 1, y = 3100, label=label_rho, parse=TRUE, hjust="inward", size = 3) +
+    # Both axes are already known (from the whole dataset), so use those.
+    expand_limits(x=c(0,1),y=c(4000)) 
+
+  ret
+}
+```
+
+```{r plot-all}
+
+# Calculate correlations (pearson and spearman) by tissue type.
+tissue_correlations <- result.table %>%
+  dplyr::group_by(tissue_abbreviations) %>%
+  # Calculate both pearson/spearman
+  dplyr::summarize(
+    pearson_r = cor(RSI, ImmuneScore),
+    spearman_r = cor(RSI, ImmuneScore, method="spearman")
+  ) %>%
+  # Sort by pearson
+  dplyr::arrange(pearson_r) 
+
+
+# Create plotlist of tissues
+# plot_list <- purrr::map(tissue_correlations$tissue_abbreviations, function(tissue) {
+#   scatter_plot_immune_vs_rsi(result.table, tissue = tissue)
+# })
+           
+graph_list <- result.table %>% dplyr::group_by(tissue_abbreviations) %>%
+  dplyr::summarize(agraph=list(scatter_plot_immune_vs_rsi(., unique(tissue_abbreviations)))) %>%
+  tibble::deframe()
+# Generate figure
+pdf(file="../figures/Figure_S1_RSI_Immune_Scatter.pdf",width=8.5,height=11)
+
+# This suppresses text output which is a little annoying in multi-page.
+purrr::walk(fig<-ggarrange(plotlist=graph_list,ncol=3,nrow=4), print)
+
+dev.off()
+```
+2021-07-21
+We are going to show selected plots as main figure. Selected plots, three of each. As of 2021-08-17, these are all in a single row.
+```{r}
+
+
+
+
+
+
+#pdf(file="Figure_3C_RSI_Immune_Scatter_Good.pdf",width=8.5,height=3)
+#fig<-ggarrange(plotlist=graph_list[c("MELA","HNSC","BC_BASAL")],ncol=3,nrow=1)
+# This code will arrange three selected plots in a row, place a border around all of the plots and then
+# put a title on top.
+fig3c1 <- ggpubr::annotate_figure(
+  ggpubr::ggarrange(
+    plotlist = graph_list[c("MELA","HNSC","BC_BASAL")],
+    ncol = 3,
+    nrow = 1
+  )  + 
+    ggplot2::theme(
+      panel.border = element_rect(size=1, fill=NA),
+      plot.margin = unit(c(0.1, 0.01,0.01,0.01),"cm")
+    ), 
+  top = text_grob("High Correlation", size=20)
+)
+
+
+#print(fig)
+ggsave(here::here("figures","Figure_3C1_RSI_Immune_Scatter_Good.pdf"), plot = fig3c1, width=6.69,height=2.51)
+#dev.off()
+
+#fig<-ggarrange(plotlist=plot_list[c("Bladder","Prostate","Pancreas")],ncol=3,nrow=1)
+
+fig3c2 <- ggpubr::annotate_figure(
+  ggpubr::ggarrange(
+    plotlist = graph_list[c("BLCA","PRAD","PANC")],
+    ncol = 3,
+    nrow = 1
+  )  + 
+    ggplot2::theme(
+      panel.border = element_rect(size=1, fill=NA),
+      plot.margin = unit(c(0.1, 0.01,0.01,0.01),"cm")
+    ), 
+  top = text_grob("Low Correlation", size=20)
+)
+
+ggsave(here::here("figures","Figure_3C2_RSI_Immune_Scatter_Bad.pdf"), plot = fig3c2, width=6.69, height=2.51)
+
+
+fig3c <- ggarrange(fig3c1, fig3c2, nrow = 1)
+ggsave(here::here("figures","Figure_3C_RSI_Immune_Scatter.pdf"), plot = fig3c, width=13.38, height=3.51)
+
+# To get annotation (using annotate_figure), you have to handle each
+# element individually. Because it's in a loop, we have to print
+# as well.
+#for (p in names(fig)) {
+#  print(annotate_figure(fig[[p]],
+#                bottom=text_grob(" ",face="bold",size=60),
+#                fig.lab="",#Extended Data Figure 6\n",
+#                fig.lab.pos="bottom.left",
+##                #fig.lab.face="bold",
+#                #fig.lab.size=18
+#                )
+#)
+#}
+#dev.off()
+```
+
+Next, show each score (across tumor types)
+
+```{r}
+scatter_plot_all<-function(data, mapping, ...) {
+
+  ret<-ggplot(data=data,mapping=mapping) + 
+    geom_point() + 
+    theme_bw(base_size=8) +
+    ggtitle("") +
+    geom_smooth(method = lm, se = FALSE, col="red") 
+
+  return(ret)
+}
+```
+
+```{r}
+#
+# Function to return a plain graph with the R in the middle.
+cor_text<-function(data,mapping,...) {
+  library(grid)
+  
+  x_range<-range(rlang::eval_tidy(mapping$x,data=data))
+  y_range<-range(rlang::eval_tidy(mapping$y,data=data))
+  x_center<-x_range[1]+diff(x_range)/2
+  y_center<-y_range[1]+diff(y_range)/2
+  
+  r<-cor(rlang::eval_tidy(mapping$x,data=data), rlang::eval_tidy(mapping$y, data=data))
+  ret<-ggplot(data=data,mapping=mapping) +
+    geom_blank() +
+    theme_bw() +
+    theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+    annotate("text",label=paste0("r == ",format(r,digits=3)),x=x_center,y=y_center, parse=TRUE)
+  
+  return(ret)
+}
+```
+
+```{r}
+df<-data.frame(Immune_Score=result.table$ImmuneScore,
+               RSI=result.table$RSI,
+               Stromal_Score=result.table$StromalScore,
+               ESTIMATE_Score=result.table$ESTIMATEScore,
+               Tumor_Purity=result.table$TumorPurity)
+
+
+
+pdf(file="Figure_S8_RSI_Estimate_Scatter.pdf",height=11,width=8.5)
+ggpairs(df,
+        lower = list(continuous = scatter_plot_all),
+        upper = list(continuous = cor_text)
+        ) + 
+  theme_bw(base_size=8)
+
+dev.off()
+```
+
+
+

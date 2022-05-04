@@ -1,0 +1,90 @@
+---
+title: "Project RSI_Immune: Estimate Algorithm"
+shorttitle: "RSI_Immune"
+project: 
+srpt_number: 
+version: "`r CosmosReportTemplates::git_tag()`"
+author: 'Steven Eschrich'
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+investigators:
+  - name: "Daniel Grass"
+  - name: "Javier Torres-Roca"
+project_team:
+analysis_team:
+analysis_contact:
+organization: 
+output:
+  CosmosReportTemplates::bbsr_article_pdf: default
+  word_document: default
+  pdf_document: default
+  html_document: default
+toc: yes
+---
+
+
+# Overview
+The goal of this analysis is to generate the estimate scores for the TCC cohort. 
+
+Estimate is an algorithm for estimating tumor purity, immune, etc components in tumors based on gene expression data. It is hosted [here](http://bioinformatics.mdanderson.org/main/ESTIMATE:Overview)
+
+The R package uses a set of "common" genes that are likely to be on most platforms. The list is from an object "common_genes" in the R package.
+
+This was written out to a file as ```common_genes.txt```.
+
+We can then filter Merck chip data by the common genes using the EntrezID from the common_genes and Merck annotation.
+
+Additionally, we can filter to a single probeset by selecting the probeset with the highest median expression across the TCC primary cohort.
+
+Based on this filtering, we can create a subset of the TCC cohort filtered on specific gene expression suitable for running through ESTIMATE.
+
+
+```{r setup}
+if (!require("estimate")) install.packages("estimate", repos="http://R-Forge.R-project.org")
+
+suppressPackageStartupMessages({
+   library(estimate)
+})
+```
+
+This software corresponds to
+```
+estimate_1.0.13
+```
+
+# Extract common genes
+```{r}
+write.table(file="estimate_common_genes.txt",
+            estimate::common_genes,
+            quote=F,
+            sep="\t",
+            row.names=FALSE
+)
+```
+
+# Intersect common genes with HuRSTA annotation
+```{r}
+source("findCommonGenesProbes.HuRSTA.R")
+findCommonGenesProbes.HuRSTA()
+source("runEstimate.R")
+runEstimate()
+
+```
+
+We read the GCT file in, then write out in a better form.
+```{r}
+raw_estimate_scores<-read.table(file="tcc-primary-ESTIMATE-predictions.gct",header=T,skip=2)
+z<-colnames(raw_estimate_scores)
+z<-sub("X\\.","@",z)
+colnames(raw_estimate_scores)<-z
+rm(z)
+estimate_scores<-raw_estimate_scores[,3:ncol(raw_estimate_scores)]
+rownames(estimate_scores)<-raw_estimate_scores[,1]
+estimate_scores<-t(estimate_scores)
+write.table(estimate_scores,file="../../data.derived/estimate_scores.txt",quote=F,sep="\t")
+saveRDS(estimate_scores,file="../../data.derived/estimate_scores.RDS")
+
+```
+
+```{r session.info.table,results='asis',echo=FALSE}
+CosmosReportTemplates::print_session_information()
+```

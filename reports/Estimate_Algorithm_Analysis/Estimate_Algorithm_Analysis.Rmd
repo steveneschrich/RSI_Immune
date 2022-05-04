@@ -1,0 +1,274 @@
+---
+title: "Project RSI_Immune: ESTIMATE Comparisons"
+shorttitle: "RSI_Immune"
+project: 
+srpt_number: 
+version: "`r CosmosReportTemplates::git_tag()`"
+author: 'Steven Eschrich'
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+investigators:
+  - name: "Daniel Grass"
+  - name: "Javier Torres-Roca"
+project_team:
+analysis_team:
+analysis_contact:
+organization: 
+output:
+  CosmosReportTemplates::bbsr_article_pdf: default
+  word_document: default
+  pdf_document: default
+  html_document: default
+toc: yes
+---
+
+The goal of this analysis is to use the ESTIMATE predictions on the TCC cohort and try to understand if they make sense. Specifically, we look at the distribution of the scores. Next, we examine the scores relative to the pathologist evaluation of the tumors and finally compare to our existing signatures. The summary result of this analysis is that we believe that the ESTIMATE predictions are reasonable and accurate.
+
+
+First, the code below is needed to setup appropriate analysis.
+
+```{r}
+
+library(ggplot2)
+library(xtable)
+library(knitr)
+library(dplyr)
+library(readr)
+library(tibble)
+```
+
+
+```{r setup}
+estimate_scores<-as.data.frame(readRDS(file="../../data.derived/estimate_scores.RDS"))
+
+```
+
+The ESTIMATE score was previously generated. ESTIMATE provides several related scores. They include: StromalScore, ImmuneScore, ESTIMATEScore, TumorPurity. 
+
+Below are the distributions of these scores across all TCC, for which there are
+ rows.
+
+```{r}
+ggplot(estimate_scores,aes(StromalScore))+geom_histogram(binwidth=500)+ggtitle("Stromal Score across TCC")
+```
+
+
+```{r}
+ggplot(estimate_scores,aes(ImmuneScore))+geom_histogram(binwidth=500)+ggtitle("Immune Score across TCC")
+```
+```{r}
+ggplot(estimate_scores,aes(ESTIMATEScore))+geom_histogram(binwidth=500)+ggtitle("ESTIMATE Score across TCC")
+```
+
+
+```{r}
+ggplot(estimate_scores,aes(TumorPurity))+geom_histogram(binwidth=.1)+ggtitle("Tumor Purity across TCC")
+```
+
+
+How do these scores related to each other? 
+```{r}
+cor(estimate_scores[,1:4])
+```
+At least tumor purity is negatively correlated with the other scores (which may be enforced in the algorithm). The immune score and the stromal score are least correlated.
+
+```{r}
+ggplot(estimate_scores,aes(StromalScore,ImmuneScore)) + geom_point() + stat_density_2d()
+```
+
+
+What does tumor purity look like by tumor type?
+```{r}
+#ggplot(estimate_scores,aes(TumorPurity, SOO_Merged))+geom_boxplot(width=2)+geom_jitter()
+```
+
+
+# PQC
+
+Load in and process the PQC data.
+```{r}
+tcc_data_table<-read_tsv(file="../../data.raw/tcc_10469_barcodes_vetted.txt")
+pqc_table<-read_tsv(file="../../data.raw/PQC.txt")
+estimate_table<-as_tibble(estimate_scores, rownames="BARCODE")
+
+pqc<- tcc_data_table %>%
+  left_join(pqc_table, by=c("SAMPLE_FAMILY"="samplefamilyid")) %>%
+  left_join(estimate_table,by=c("BARCODE"="BARCODE")) %>%
+  mutate(`PQC-Malignancy`=as.numeric(`PQC-Malignancy`)) %>%
+  mutate(`PQC-Cellularity`= as.numeric(`PQC-Cellularity`)) %>%
+  mutate(`PQC-Reactive Stroma` = as.numeric(`PQC-Reactive Stroma`)) %>%
+  mutate(`PQC-Malignancy Category` = 
+           ifelse(`PQC-Malignancy` < 25, 1,
+           ifelse(`PQC-Malignancy` < 50, 2,
+           ifelse(`PQC-Malignancy` < 75, 3, 4 )))) %>%
+  mutate(`PQC-Cellularity Category` = 
+           ifelse(`PQC-Cellularity` < 25, 1,
+           ifelse(`PQC-Cellularity` < 50, 2,
+           ifelse(`PQC-Cellularity` < 75, 3, 4 )))) %>%
+  mutate(`PQC-Reactive Stroma Category`=
+           ifelse(`PQC-Reactive Stroma` < 25, 1,
+           ifelse(`PQC-Reactive Stroma` < 50, 2,
+           ifelse(`PQC-Reactive Stroma` < 75, 3, 4 ))))
+           
+  
+
+#estimate$SOO_Merged<-apply(estimate,1,function(y){if (y["SOO_Subtype"]!="") {y["SOO_Subtype"]} else {y["SOO_Conformed"]}})
+
+
+```
+
+We will test the following PQC fields:
+ 
+ 
+PQC.Malignancy
+PQC.Cellularity
+PQC.Reactive.Stroma
+PQC.Normal
+
+It is important to note that PQC is a pathologist evaluation of the different components and is typical a percentage estimate. This information is likely very discretized and not extremely accurate, however our expectation is that the trends in the PQC should correspond to the molecular signatures.
+
+Do the tumor purity scores relate to PQC Malignancy evaluation? 
+```{r}
+boxplot(TumorPurity~`PQC-Malignancy Category`,main="Tumor Purity vs. PQC Malignancy",xlab="Quartile PQC",ylab="Tumor Purity", data=pqc)
+```
+
+Do the tumor purity scores relate to PQC Cellularity evaluation? 
+```{r}
+boxplot(TumorPurity~`PQC-Cellularity Category`,main="Tumor Purity vs. PQC Cellularity",xlab="Quartile PQC",ylab="Tumor Purity", data=pqc)
+```
+
+Does the Reactive Stroma agree with Stromal Score? 
+```{r}
+boxplot(StromalScore~`PQC-Reactive Stroma Category`,main="Stromal Score vs. PQC Reactive Stroma",xlab="Quartile PQC Reactive Stroma",ylab="Stromal Score", data=pqc)
+```
+
+Figure S9A PQC Stroma data related to Estimate Score
+```{r}
+
+pdf(file="Figure_S4_PQC.pdf")
+boxplot(StromalScore~`PQC-Reactive Stroma Category`,main="Stromal Score vs. PQC Reactive Stroma",xlab="Quartile PQC Reactive Stroma",ylab="Stromal Score", data=pqc)
+dev.off()
+```
+
+The methods/results for the above is as follows.
+A pathology quality control (PQC) estimate of the percentage of stromal content within each specimen was evaluated. This percentage (when present) was categorized into quantiles (1-4, 0-24%, 25-49%, 50-74%,75-100%). Then, the estimated stromal score was compared to PQC categories. The Stromal score differed between categories significantly (KW test, p<2.2e-16; Dunn's Kruskal-Wallis test of multiple comparisons, smallest p adjusted < 7.189581e-04). The PQC categories were also correlated with the Stromal Score (p<2.2e-16, R=0.3)
+
+```{r}
+cor.test(~StromalScore + `PQC-Reactive Stroma Category`, data=pqc)
+kruskal.test(StromalScore ~ `PQC-Reactive Stroma Category`, data=pqc)
+library(FSA)
+dunnTest(StromalScore~as.factor(`PQC-Reactive Stroma Category`),data=pqc)
+```
+
+
+
+
+
+
+
+
+Do the Immune scores relate to PQC Malignancy evaluation? 
+```{r}
+boxplot(ImmuneScore~`PQC-Malignancy Category`,main="Immune Score vs. PQC Malignancy",xlab="Quartile PQC",ylab="Immune Score", data=pqc)
+```
+
+This suggests that the immune score at least is low when the normal content of the tumor is high. 
+
+- We have several internally developed gene signatures that we can compare to the immune score generated by ESTIMATE.
+
+First, the 12-chemokine score developed for Jim Mule. It appears to be roughly correlated with the Immune Score (R=`r cor(estimate$ImmuneScore,estimate$Signature.Chemokine,use="pairwise.complete.obs")`)
+
+```{r}
+plot(estimate$ImmuneScore,estimate$Signature.Chemokine,main="ESTIMATE Immune vs. 12-Chemokine score",xlab="Immune Score",ylab="12-Chemokine")
+```
+
+The correlation of the Immune Score and our internally developed immune PCA signature is much higher (R=`r cor(estimate$ImmuneScore,estimate$Signature.Immune,use="pairwise.complete.obs")`)
+
+```{r}
+plot(estimate$ImmuneScore,estimate$Signature.Immune,main="ESTIMATE Immune vs. Immune score",xlab="Immune Score",ylab="PCA Immune")
+```
+
+```{r}
+boxplot(estimate$TumorPurity~estimate$SOO_Merged,las=2,main="Tumor Purity across Site of Origin")
+stripchart(estimate$TumorPurity~estimate$SOO_Merged,vertical=TRUE,data=estimate,method="jitter",add=TRUE,pch=20,col="blue",cex=0.1,cex.axis=0.01)
+```
+
+
+
+```{r}
+
+estimate.result.table<-matrix(nrow=length(unique(estimate$SOO_Merged)),ncol=5,
+                              dimnames=list(rownames=unique(estimate$SOO_Merged),
+                              colnames=c("N","TumorPurity","ImmuneScore","StromalScore","ESTIMATEScore")))
+
+for (tt in unique(estimate$SOO_Merged)) {
+  estimate.tt<-estimate[which(estimate$SOO_Merged==tt),] 
+  estimate.result.table[tt,"N"]<-nrow(estimate.tt)
+  median.rsi<-median(estimate.tt$RSI)
+  estimate.tt$RSI_Category<-c("LOW","HI")[as.numeric(estimate.tt$RSI>median.rsi)+1]
+  boxplot(TumorPurity~RSI_Category,
+          data=estimate.tt,
+          main=paste("Tumor Purity vs.",tt,"\nN =",length(estimate.tt$TumorPurity)),
+          sub=paste("MW test p value =",
+                    format(wilcox.test(TumorPurity~RSI_Category,
+                                         data=estimate.tt)$p.value,
+                           digits=4)
+                    ),
+          ylab="Tumor Purity",
+          xlab="RSI",
+          ylim=c(0,1)
+          )
+  stripchart(TumorPurity~RSI_Category,vertical=TRUE,data=estimate.tt,method="jitter",add=TRUE,pch=20,col="blue",cex=0.25)
+  estimate.result.table[tt,"TumorPurity"]<-wilcox.test(TumorPurity~RSI_Category,data=estimate.tt)$p.value
+  
+  
+    boxplot(ImmuneScore~RSI_Category,
+          data=estimate.tt,
+          main=paste("Immune Score vs.",tt,"\nN =",length(estimate.tt$ImmuneScore)),
+          sub=paste("MW test p value =",
+                    format(wilcox.test(ImmuneScore~RSI_Category,
+                                         data=estimate.tt)$p.value,
+                           digits=4)
+                    ),
+          ylab="Immune Score",
+          xlab="RSI",
+          ylim=c(-2500,4000)
+          )
+  stripchart(ImmuneScore~RSI_Category,vertical=TRUE,data=estimate.tt,method="jitter",add=TRUE,pch=20,col="blue",cex=0.25)
+  estimate.result.table[tt,"ImmuneScore"]<-wilcox.test(ImmuneScore~RSI_Category,data=estimate.tt)$p.value
+  
+  
+      boxplot(StromalScore~RSI_Category,
+          data=estimate.tt,
+          main=paste("Stromal Score vs.",tt,"\nN =",length(estimate.tt$StromalScore)),
+          sub=paste("t test p value =",
+                    format(wilcox.test(StromalScore~RSI_Category,
+                                         data=estimate.tt)$p.value,
+                           digits=4)
+                    ),
+          ylab="Stromal Score",
+          xlab="RSI",
+          ylim=c(-2500,3000)
+          )
+  stripchart(StromalScore~RSI_Category,vertical=TRUE,data=estimate.tt,method="jitter",add=TRUE,pch=20,col="blue",cex=0.25)
+  estimate.result.table[tt,"StromalScore"]<-wilcox.test(StromalScore~RSI_Category,data=estimate.tt)$p.value
+  
+  
+        boxplot(ESTIMATEScore~RSI_Category,
+          data=estimate.tt,
+          main=paste("ESTIMATE Score vs.",tt,"\nN =",length(estimate.tt$ESTIMATEScore)),
+          sub=paste("t test p value =",
+                    format(wilcox.test(ESTIMATEScore~RSI_Category,
+                                         data=estimate.tt)$p.value,
+                           digits=4)
+                    ),
+          ylab="ESTIMATE Score",
+          xlab="RSI",
+          ylim=c(-4000,6000)
+          )
+  stripchart(ESTIMATEScore~RSI_Category,vertical=TRUE,data=estimate.tt,method="jitter",add=TRUE,pch=20,col="blue",cex=0.25)
+  estimate.result.table[tt,"ESTIMATEScore"]<-wilcox.test(ESTIMATEScore~RSI_Category,data=estimate.tt)$p.value
+
+}
+
+kable(estimate.result.table[order(estimate.result.table[,"ImmuneScore"]),])
+```

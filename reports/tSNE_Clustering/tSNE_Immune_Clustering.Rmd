@@ -1,0 +1,266 @@
+---
+title: "Project RSI_Immune: immune-based tSNE Figure"
+shorttitle: "RSI_Immune"
+project: 
+srpt_number: 
+version: "`r CosmosReportTemplates::git_tag()`"
+author: 'Steven Eschrich'
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+investigators:
+  - name: "Daniel Grass"
+  - name: "Javier Torres-Roca"
+project_team:
+analysis_team:
+analysis_contact:
+organization: 
+output:
+  CosmosReportTemplates::bbsr_article_pdf: default
+  word_document: default
+  pdf_document: default
+  html_document: default
+toc: yes
+---
+
+```{r setup}
+library(readxl)
+library(dplyr)
+library(ggplot2)
+library(grid)
+library(nipals)
+library(HuRSTA.db)
+```
+
+
+```{r}
+tcc_primary_expression<-readRDS(file="../../data.derived/tcc-primary-expression.RDS")
+probeset_medians<-apply(tcc_primary_expression,1,median)
+
+gene_lists<-read_excel(path="../../reports/tSNE_Clustering/ESTIMATE_clustering/41467_2013_BFncomms3612_MOESM488_ESM.xlsx",skip=1)
+estimate_genes<-unlist(gene_lists[which(gene_lists$Set=="Immune141_UP"),3:ncol(gene_lists)])
+
+
+# Unlist the mapping table for probesets to gene symbols.
+gene_mapping_table<-sapply(as.list(HuRSTASYMBOL[mappedkeys(HuRSTASYMBOL)]),function(y){y[[1]]})
+# Exclude AFFX probesets
+gene_mapping_table<-gene_mapping_table[which(!startsWith(names(gene_mapping_table), "AFFX"))]
+
+
+estimate_probeset_mapping<-t(sapply(estimate_genes, function(g){
+    potential_probesets<-names(which(gene_mapping_table==g))
+    chosen_probeset<-names(which.max(probeset_medians[potential_probesets]))
+    if ( is.null(chosen_probeset)) {
+      return(c(NA,g))
+    } else {
+      return(c(chosen_probeset, g))
+    }
+}))
+colnames(estimate_probeset_mapping)<-c("probeset","gene")
+estimate_probeset_mapping<-estimate_probeset_mapping[which(!is.na(estimate_probeset_mapping[,"probeset"])),]
+rownames(estimate_probeset_mapping)<-1:nrow(estimate_probeset_mapping)
+
+tcc_estimate_expression<-tcc_primary_expression[estimate_probeset_mapping[,1],]
+saveRDS(tcc_estimate_expression, file="../../reports/tSNE_Clustering/ESTIMATE_clustering/estimate_tcc_reduced_expression.RDS")
+
+```
+
+Alternate approach is to try and use cibersort data for this (NCA).
+```{r}
+tcc_nca_expression<-result_table[,grep("_NCA",colnames(result_table))]
+```
+
+We use the nipals algorithm to compute the first 50 components of the dataset (rather than all). NB: The signs of the scores are arbitrary, so may flip based on either the order of the samples or other conditions.
+```{r}
+
+#mypca<-nipals(t(tcc_estimate_expression),verbose=TRUE)#ncomp=50,
+#pca<-pca(t(tcc_estimate_expression), method="nipals", center=TRUE, scale="uv", nPcs=50)
+
+#saveRDS(mypca,file="estimate_tcc_primary_pca.RDS")
+```
+
+```{r}
+#estimate_pca<-readRDS(file="estimate_tcc_primary_pca.RDS")
+#estimate_pca<-mypca
+```
+
+Then we do the tSNE clustering with the PC's are a starting point.
+```{r}
+library(Rtsne)
+estimate.ts.100<-Rtsne(estimate_pca$x,pca=FALSE,perplexity=100)
+# Important: make sure the Y matrix is annotated as to what samples are what.
+rownames(estimate.ts.100$Y)<-rownames(estimate_pca$x)
+saveRDS(estimate.ts.100,file="estimate-tsne-perplexity=100-clusters.RDS")
+```
+
+```{r}
+
+#mypca.unscaled<-prcomp(tcc_estimate_expression, scale.=FALSE, center=FALSE)
+mypca.scaled<-prcomp(tcc_nca_expression, scale.=TRUE, center=TRUE)
+nca.scaled<-scale(tcc_nca_expression)
+#nca.unscaled<-tcc_estimate_expression
+
+#pdf(file="tsne_trials.pdf")
+#for (perplexity in c(10,30,50,100,150,200,300,500)) {
+#for (perplexity in c(100)) {
+  #tsne.pca.unscaled<-Rtsne(mypca.unscaled$x,pca=FALSE,perplexity=perplexity)
+  #tsne.pca.scaled<-Rtsne(mypca.scaled$x, pca=FALSE, perplexity=perplexity)
+  #tsne.nca.unscaled<-Rtsne(nca.unscaled, pca=FALSE, perplexity=perplexity)
+  #tsne.nca.scaled<-Rtsne(nca.scaled, pca=FALSE, perplexity = perplexity)
+ 
+ # plot(tsne.pca.unscaled$Y,main=sprintf("PCA Unscaled %d",perplexity))
+ # plot(tsne.pca.scaled$Y,main=sprintf("PCA Scaled %d",perplexity))
+ # plot(tsne.nca.unscaled$Y,main=sprintf("NCA Unscaled %d",perplexity))
+ # plot(tsne.nca.scaled$Y,main=sprintf("NCA scaled %d",perplexity))
+  
+#}
+#dev.off()
+
+
+tsne.pca.scaled<-Rtsne(mypca.scaled$x, pca=FALSE, perplexity=100)
+rownames(tsne.pca.scaled$Y)<-rownames(mypca.scaled$x)
+  #tsne.nca.unscaled<-Rtsne(nca.unscaled, pca=FALSE, perplexity=perplexity)
+tsne.nca.scaled<-Rtsne(nca.scaled, pca=FALSE, perplexity = 100)
+rownames(tsne.nca.scaled$Y)<-rownames(nca.scaled)
+ 
+
+
+Heatmap(nca.unscaled[rownames(result.table),], show_row_names=FALSE, right_annotation = rowAnnotation(SOO=result.table$SOO_Merged))
+```
+
+
+
+```{r load}
+
+graph_styles<-read_excel("data.raw/Graph_Colors_Shapes.xlsx")
+
+#estimate.ts.100<-readRDS("estimate-tsne-perplexity=100-clusters.RDS")
+#result.table<-readRDS("data.derived/tcc-primary-metadata.RDS")
+
+# Combine metadata with tSNE results for clustering.
+df<-data.frame(x.100=tsne.pca.scaled$Y[rownames(result.table),1],
+                y.100=tsne.pca.scaled$Y[rownames(result.table),2],
+                result.table,
+                stringsAsFactors = FALSE,
+                check.names=FALSE)
+
+
+# Four samples have NA's for the tissue abbreviation/SOO_Merged field.
+df<-df[which(!is.na(df$SOO_Merged)),]
+
+
+#saveRDS(df,file="estimate-tsne-dataframe-for-clustering.RDS")
+```
+
+
+
+The function defined below graphs the tSNE data, with abbreviations.
+```{r}
+tcc.tsne.ggplot<-function(df, type,main="") {
+  # Merge label into data
+  graph_data<-as_tibble(df) %>% 
+    left_join(dplyr::select(graph_styles, c("SOO_Merged","tissue_abbreviations")), by=c("SOO_Merged"="SOO_Merged"))
+  
+  tcc.plot<-ggplot(graph_data,aes(x=x.100,y=y.100,
+                          label=tissue_abbreviations,
+                          shape=tissue_abbreviations)) 
+  
+  
+  # Setting this name means the legend is coalesced.
+  tcc.plot<-tcc.plot + 
+    aes(col=tissue_abbreviations) +
+    scale_colour_manual(values = structure(graph_styles$tsne_color,
+                                           names=graph_styles$tissue_abbreviations), 
+                        name="Tumor Type")  +
+    guides(fill=guide_legend(nrow=4),
+           shape=guide_legend(nrow=4),
+           colour=guide_legend(nrow=4)) 
+  
+  
+  tcc.plot<- tcc.plot +
+    ggtitle(main) +
+    
+    
+    # Turn off x and y labels; remove gray background; remove tick marks, etc.
+    xlab("")+
+    ylab("")+
+    theme_bw() +
+    theme(
+      panel.grid.major = element_blank(), 
+      panel.grid.minor = element_blank(),
+      axis.text.y=element_blank(),
+      axis.ticks.y=element_blank(),
+      axis.text.x=element_blank(),
+      axis.ticks.x=element_blank(),
+      legend.position=ifelse(type=="main","bottom","right")
+    ) +
+    
+    
+    # Plot the points, with a smaller size since there are so many.  
+    geom_point(size=1.5)+
+    # Manually set the colors for the points to hard-code the information. It is colored by  Site of Origin.
+    
+    # Setting this name means the legend is coalesced.
+    scale_shape_manual(values = structure(
+      graph_styles$shape,
+      names=graph_styles$tissue_abbreviations),
+      name="Tumor Type",
+      guide=ifelse(type=="main","legend","none")
+      
+    ) 
+    
+    
+    # Annotate the clusters with specific tissue-oriented labels. This is hard-coded with coordinates based on 
+    # the initial cluster plot. Changing the clusters changes these!
+    text_annotation<-graph_styles %>%
+      filter(tsne_plot_label==TRUE) %>%
+      mutate(label=coalesce(tsne_label, tissue_abbreviations))
+
+    #tcc.plot<-tcc.plot +
+    #  annotate("text",
+    #         x=text_annotation$tsne_x,
+    #         y=text_annotation$tsne_y,
+    #         col=text_annotation$tsne_color,
+    #         label=text_annotation$label
+    #  )
+  
+  
+  
+  return(tcc.plot)
+}
+
+
+```
+
+
+Generate the figure.
+```{r}
+cairo_pdf(file="CIBERSORT_tSNE_Clustering.pdf",width=11,height=8.5)
+grid.newpage()
+pushViewport(viewport(layout = grid.layout(nrow = 2, ncol = 1, heights = unit(c(0.9,0.1),"null"))))
+pushViewport(viewport(layout.pos.row = 1, layout.pos.col = 1))
+print(tcc.tsne.ggplot(df,"main",main=""),newpage=FALSE)
+upViewport()
+
+grid.text(x=unit(1,"in"),
+          y=unit(0.3,"in"),
+          "Figure 1"
+)
+
+dev.off()
+
+
+df<-data.frame(x.100=tsne.pca.scaled$Y[rownames(result.table),1],
+                y.100=tsne.pca.scaled$Y[rownames(result.table),2],
+                result.table,
+                stringsAsFactors = FALSE,
+                check.names=FALSE)
+df<-df[which(!is.na(df$SOO_Merged)),]
+df<-df[which(df$SOO_Merged=="HGG"),]
+tcc.tsne.ggplot(df,"main",main="")
+```
+
+```{r}
+library(GGally)
+pdf(file="estimate_pca_pairs.pdf")
+ggpairs(data.frame(cbind(estimate_pca$scores[,1:5],overall_pca$scores[,1:5])))
+dev.off()
+```

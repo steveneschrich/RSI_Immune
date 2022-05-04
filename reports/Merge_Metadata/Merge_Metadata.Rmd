@@ -1,0 +1,78 @@
+---
+title: "Project RSI_Immune: Merge_Metadata"
+shorttitle: "RSI_Immune"
+project: 
+srpt_number: 
+version: "`r CosmosReportTemplates::git_tag()`"
+author: 'Steven Eschrich'
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+investigators:
+  - name: "Daniel Grass"
+  - name: "Javier Torres-Roca"
+project_team:
+analysis_team:
+analysis_contact:
+organization: 
+output:
+  CosmosReportTemplates::bbsr_article_pdf: default
+  word_document: default
+  pdf_document: default
+  html_document: default
+toc: yes
+---
+
+# Overview
+After RSI, Estimate and CIBERSORT have been calculated, we pull all this information together into a single data structure for graphing, etc.
+
+```{r}
+tcc_primary_metadata<-readRDS("../../data.derived/tcc-primary-metadata.RDS")
+estimate_scores<-readRDS("../../data.derived/estimate_scores.RDS")
+rsi<-readRDS("../../data.derived/rsi.RDS")
+cibersort_scores_rel<-readRDS("../../data.derived/cibersort_scores_rel.RDS")
+cibersort_scores_nca<-readRDS("../../data.derived/cibersort_scores_nca.RDS")
+```
+
+Create the result table.
+```{r}
+result.table<-cbind(tcc_primary_metadata,
+                    estimate_scores[rownames(tcc_primary_metadata),],
+                    cibersort_scores_rel[rownames(tcc_primary_metadata),],
+                    cibersort_scores_nca[rownames(tcc_primary_metadata),]
+)
+result.table$RSI<-rsi[rownames(tcc_primary_metadata),]
+
+
+```
+
+Create indicator variables.
+```{r}
+# Create RSI categories based on SOO_Merged field
+for (tissue_type in unique(result.table$SOO_Merged)) {
+  result.table.subset<-result.table[which(result.table$SOO_Merged==tissue_type),]
+  result.table[rownames(result.table.subset),"RSI_Category_Merged"]<-c("LOW","HI")[as.numeric(result.table.subset$RSI>median(result.table.subset$RSI))+1]
+}
+
+immune.celltypes<-sub("_REL$","",colnames(cibersort_scores_rel)[1:22])
+# Create Immune categories based on SOO_Merged field
+for (tissue_type in unique(result.table$SOO_Merged)) {
+  result.table.subset<-result.table[which(result.table$SOO_Merged==tissue_type),]
+  result.table[rownames(result.table.subset),"Immune_Category_Merged"]<-c("LOW","HI")[as.numeric(result.table.subset$ImmuneScore>median(result.table.subset$ImmuneScore))+1]
+  for (celltype in immune.celltypes)  {
+    rel.celltype<-paste0(celltype,"_REL")
+    nca.celltype<-paste0(celltype,"_NCA")
+    result.table[rownames(result.table.subset),paste("REL_",celltype,"_Category_Merged",sep="")]<-c("LOW","HI")[as.numeric(result.table.subset[,rel.celltype]>median(result.table.subset[,rel.celltype]))+1]
+    result.table[rownames(result.table.subset),paste("NCA_",celltype,"_Category_Merged",sep="")]<-c("LOW","HI")[as.numeric(result.table.subset[,nca.celltype]>median(result.table.subset[,nca.celltype]))+1]
+    
+  }
+  
+}
+```
+
+Write out the result table.
+```{r}
+saveRDS(result.table,file="../../data.derived/result_table.RDS")
+```
+
+```{r session.info.table,results='asis',echo=FALSE}
+CosmosReportTemplates::print_session_information()
+```

@@ -1,0 +1,194 @@
+---
+title: "Project RSI_Immune: PCA CIBERSORT Cell Types by Disease"
+shorttitle: "RSI_Immune"
+project: 
+srpt_number: 
+version: "`r CosmosReportTemplates::git_tag()`"
+author: 'Steven Eschrich'
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+investigators:
+  - name: "Daniel Grass"
+  - name: "Javier Torres-Roca"
+project_team:
+analysis_team:
+analysis_contact:
+organization: 
+output:
+  CosmosReportTemplates::bbsr_article_pdf: default
+  word_document: default
+  pdf_document: default
+  html_document: default
+toc: yes
+---
+
+```{r setup}
+library(readxl)
+library(grid)
+library(dplyr)
+library(GGally)
+library(ggpubr)
+library(ggrepel)
+library(ggpubr)
+library(extrafont)
+
+# Run font_import if the fonts are not already available in R.
+font_import(prompt=FALSE, pattern="Arial")
+loadfonts(device = "pdf",quiet=TRUE)
+# fonts()
+```
+
+
+```{r}
+result_table<-readRDS("../../data.derived/result_table.RDS")
+graph_details<-read_excel("../../data.raw/Graph_Colors_Shapes.xlsx")
+graph_map<-graph_details$tissue_abbreviations
+names(graph_map)<-graph_details$SOO_Merged
+
+cibersort<-readRDS(file="../../data.derived/cibersort_scores_rel.RDS")
+colnames(cibersort)<-sub("_REL$","",colnames(cibersort))
+cibersort<-cibersort[,1:22]
+cell_type_mapping<-read.table(file="../../data.raw/cell_type_map.txt",row.names=1,header=T,stringsAsFactors = FALSE,sep="\t",quote="")
+
+
+cell_type_classification<-read.table(file="../../data.raw/CellTypeClassification.txt",header=T,row.names=1,stringsAsFactors = FALSE)
+```
+
+
+```{r}
+plot_loadings_for_cell_types<-function(pca, tissue) {
+  gdf<-data.frame(x=pca$rotation[,1],y=pca$rotation[,2],names=cell_type_mapping[rownames(pca$rotation),1],
+                Category=cell_type_classification[rownames(pca$rotation),2],
+                stringsAsFactors = FALSE)
+  var<-100*(pca$sdev^2/sum(pca$sdev^2))
+
+
+  g<-ggplot(gdf,aes(x=x,y=y, fill=Category, label=names)) + 
+    geom_point(size=4, shape=21, color="black") +
+    theme_bw() +
+    geom_text_repel(point.padding=0.4,parse=TRUE,family="Arial",size=3) +
+    xlab(sprintf("p[1] (%3.1f%%)",var[1])) +
+    ylab(sprintf("p[2] (%3.1f%%)",var[2])) +
+    theme(text=element_text(family="Arial"),
+          legend.title=element_blank(),
+          legend.text=element_text(size=6),
+          legend.position="bottom") +
+    ggtitle(graph_map[tissue]) +
+    coord_fixed() #+
+    #xlim(c(-0.55,0.55)) +
+    #sylim(c(-0.55,0.55))
+
+  
+  return(g)
+}
+
+
+```
+
+
+```{r}
+plot_list<-list()
+raw_tissue_labels<-na.omit(unique(result_table$SOO_Merged))
+tissue_type_order<-raw_tissue_labels[order(graph_map[raw_tissue_labels])]
+for (tissue in tissue_type_order) {
+  cibersort_subset<-cibersort[which(result_table$SOO_Merged==tissue),]
+  cibersort_subset<-cibersort_subset[,which(apply(cibersort_subset,2,var)>0)]
+  pca<-prcomp(cibersort_subset,scale.=F)
+  plot_list[[tissue]]<-plot_loadings_for_cell_types(pca, tissue)
+}
+```
+
+```{r}
+pdf(file="Figure_S10_PCA_CIBERSORT_CellTypes_by_Disease.pdf",height=11,width=8.5)
+ggarrange(plotlist=plot_list, ncol=2,nrow=3)
+dev.off()
+```
+
+
+
+
+
+```{r}
+#  annotate_figure(g,
+#                bottom=text_grob(" ",face="bold",size=60),
+#                fig.lab="Supplemental Figure 7\n",
+#                fig.lab.pos="bottom.left"
+#                #fig.lab.face="bold",
+#                #fig.lab.size=18
+#  )
+
+
+
+# To get annotation (using annotate_figure), you have to handle each
+# element individually. Because it's in a loop, we have to print
+# as well.
+for (p in names(fig)) {
+  print(annotate_figure(fig[[p]],
+                bottom=text_grob(" ",face="bold",size=60),
+                fig.lab="Supplemental Figure 5\n",
+                fig.lab.pos="bottom.left",
+#                #fig.lab.face="bold",
+#                #fig.lab.size=18
+                )
+)
+}
+dev.off()
+```
+
+Next, show each score (across tumor types)
+
+```{r}
+scatter_plot_all<-function(data, mapping, ...) {
+
+  ret<-ggplot(data=data,mapping=mapping) + 
+    geom_point() + 
+    theme_bw(base_size=8) +
+    ggtitle("") +
+    geom_smooth(method = lm, se = FALSE, col="red") 
+
+  return(ret)
+}
+```
+
+```{r}
+#
+# Function to return a plain graph with the R in the middle.
+cor_text<-function(data,mapping,...) {
+  library(grid)
+  
+  x_range<-range(rlang::eval_tidy(mapping$x,data=data))
+  y_range<-range(rlang::eval_tidy(mapping$y,data=data))
+  x_center<-x_range[1]+diff(x_range)/2
+  y_center<-y_range[1]+diff(y_range)/2
+  
+  r<-cor(rlang::eval_tidy(mapping$x,data=data), rlang::eval_tidy(mapping$y, data=data))
+  ret<-ggplot(data=data,mapping=mapping) +
+    geom_blank() +
+    theme_bw() +
+    theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+    annotate("text",label=paste0("r == ",format(r,digits=3)),x=x_center,y=y_center, parse=TRUE)
+  
+  return(ret)
+}
+```
+
+```{r}
+df<-data.frame(Immune_Score=result.table$ImmuneScore,
+               RSI=result.table$RSI,
+               Stromal_Score=result.table$StromalScore,
+               ESTIMATE_Score=result.table$ESTIMATEScore,
+               Tumor_Purity=result.table$TumorPurity)
+
+
+
+pdf(file="Figure_S6_RSI_Estimate_Scatter.pdf",height=11,width=8.5)
+ggpairs(df,
+        lower = list(continuous = scatter_plot_all),
+        upper = list(continuous = cor_text)
+        ) + 
+  theme_bw(base_size=8)
+
+dev.off()
+```
+
+
+

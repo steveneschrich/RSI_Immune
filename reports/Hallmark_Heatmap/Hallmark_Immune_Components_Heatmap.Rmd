@@ -1,0 +1,214 @@
+---
+title: "Project RSI_Immune: Hallmark_Immune_Components_Heatmap"
+shorttitle: "RSI_Immune"
+project: 
+srpt_number: 
+version: "`r CosmosReportTemplates::git_tag()`"
+author: 'Steven Eschrich'
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+investigators:
+  - name: "Daniel Grass"
+  - name: "Javier Torres-Roca"
+project_team:
+analysis_team:
+analysis_contact:
+organization: 
+output:
+  CosmosReportTemplates::bbsr_article_pdf: default
+  word_document: default
+  pdf_document: default
+  html_document: default
+toc: yes
+---
+
+
+The goal of this analysis is to extract the gene expression associated with all immune hallmark genesets, average it by site of origin, then provide a heatmap of the different hallmarks.
+
+```{r setup}
+library(readr)
+library(dplyr)
+library(matrixStats)
+library(ComplexHeatmap)
+library(readxl)
+library(tibble)
+library(circlize)
+```
+
+```{r}
+all.msigdb.hallmarks<-readRDS(file="../../data.raw/msigdb.v6.1.hallmarks.rds")
+
+merck_annotation<-read_tsv(file="../../data.raw/hursta_annotation.txt")
+                             
+tcc.primary<-readRDS(file="../../data.derived/tcc-primary-expression.rds")
+result_table<-readRDS(file="../../data.derived/result_table.RDS")
+hallmark_categories<-read_excel("../../data.raw/Hallmark_Signature_Categories.xlsx") %>%
+        mutate(`Hallmark Name`=toupper(`Hallmark Name`)) %>%
+        arrange(`Hallmark Name`)
+graph_config<-read_excel("../../data.raw/Graph_Colors_Shapes.xlsx")
+```
+
+First step is to reduce the hallmarks to the immune components (categories).
+```{r}
+immune_hallmarks<-c(hallmark_categories %>% filter(`Process Category`=="immune") %>% pull(`Hallmark Name`))
+all.msigdb.hallmarks$geneset.names<-sub("^HALLMARK_","",all.msigdb.hallmarks$geneset.names)
+immune_hallmarks_i<-which(all.msigdb.hallmarks$geneset.names %in% immune_hallmarks)
+msigdb.hallmarks<-list(genesets=all.msigdb.hallmarks$genesets[immune_hallmarks_i],
+                       geneset.names=all.msigdb.hallmarks$geneset.names[immune_hallmarks_i],
+                       geneset.descriptions=all.msigdb.hallmarks$geneset.descriptions[immune_hallmarks_i]
+)
+```
+
+```{r}
+#
+# extractAndSummarizeGeneset
+# Given a gene list, extract the expression data from a large expression matrix. Then
+# summarize individual observations to by the categories (using median).
+#
+# part1: subset expression data on the basis of a gene list. This requires identifying all 
+# possible probesets, then picking the probeset with the largest median expression value.
+#
+# part2: By category, calculate the median expression value and return the summarized result.
+#
+extractAndSummarizeGeneset<-function(gene_list, exprs, annotation, categories) {
+  gene_summary_as_list<-sapply(gene_list, function(g) {
+    ps<-annotation %>% filter(Symbol==g) %>% pull(ProbeID)
+    if ( length(ps)>0) {
+      selected_ps<-ps[which.max(rowMedians(exprs[ps,,drop=F]))]
+      return(exprs[selected_ps,])
+    }
+    return(NULL)
+  },simplify=FALSE)
+  gene_summary<-do.call(rbind,gene_summary_as_list)
+  colnames(gene_summary)<-colnames(exprs)
+  rm(gene_summary_as_list)
+  
+  category_types<-na.omit(unique(categories))
+  
+  res<-sapply(category_types, function(catname) {
+    medians<-apply(gene_summary[,which(categories==catname)],1,median)
+    return(medians)
+  })
+  
+  return(res)
+}
+```
+
+
+```{r}
+
+test_rsi<-function(y, rsi_status){
+      t_result<-t.test(y~rsi_status)
+      lfc<-mean(y[rsi_status=="LOW"]) - 
+                  mean(y[rsi_status=="HI"])
+      return(-log(t_result$p.value)*sign(lfc))
+  }
+#
+# extractAndTestGeneset
+# Given a gene list, extract the expression data from a large expression matrix. Then
+# summarize individual observations by the categories through testing RSI high and low.
+#
+# part1: subset expression data on the basis of a gene list. This requires identifying all 
+# possible probesets, then picking the probeset with the largest median expression value.
+#
+# part2: By category, calculate the -log(p) * sign(diff) return the summarized result.
+#
+extractAndTestGeneset<-function(gene_list, exprs, annotation, categories) {
+  gene_summary_as_list<-sapply(gene_list, function(g) {
+    ps<-annotation %>% filter(Symbol==g) %>% pull(ProbeID)
+    if ( length(ps)>0) {
+      selected_ps<-ps[which.max(rowMedians(exprs[ps,,drop=F]))]
+      return(exprs[selected_ps,])
+    }
+    return(NULL)
+  },simplify=FALSE)
+  gene_summary<-do.call(rbind,gene_summary_as_list)
+  colnames(gene_summary)<-colnames(exprs)
+  rm(gene_summary_as_list)
+  
+  category_types<-na.omit(unique(categories))
+
+  res<-sapply(category_types, function(catname) {
+    x<-gene_summary[,which(categories==catname)]
+    rsi_status<-result_table[colnames(x),"RSI_Category_Merged"]
+    vals<-apply(x,1,function(y){ test_rsi(y,rsi_status)} )
+    return(vals)
+  })
+  
+  return(res)
+}
+```
+
+
+
+The goal of this code is to extract summary hallmark data (by tissue type) for each gene. For
+the next step (clustering) we need to also create an indicator variable of which hallmark
+each gene belongs to. We do this in a parallel array.
+```{r}
+
+
+
+hallmark_heatmap_data_as_list<-sapply(1:length(msigdb.hallmarks$geneset.names), function(i) {
+  gene_list<-msigdb.hallmarks$genesets[[i]]
+  hallmark_subset<-extractAndTestGeneset(gene_list, tcc.primary, merck_annotation, result_table$SOO_Merged)
+  return(cbind(i,hallmark_subset))
+})
+hallmark_heatmap_data<-do.call(rbind, hallmark_heatmap_data_as_list)
+
+hallmark_identification<-msigdb.hallmarks$geneset.names[hallmark_heatmap_data[,1]]
+hallmark_identification<-sub("^HALLMARK_","",hallmark_identification)
+hallmark_heatmap_data<-hallmark_heatmap_data[,2:ncol(hallmark_heatmap_data)]
+```
+Finally, we can create a heatmap with the individual genes by tissue type, separated by the
+hallmarks.
+
+
+```{r}
+# This function takes the variable in order_by, calculates the group mean and returns a list of
+# groups in order_by mean value order.
+soo_order<-function(p, group_var=SOO_Merged, order_by=ImmuneScore, summary=mean) {
+       group_var <- enquo(group_var)
+       order_by <- enquo(order_by)
+       myp<-as_tibble(rownames_to_column(p)) 
+       res<-myp %>%
+               group_by( !!group_var) %>%
+               summarize(MedianScore=median(!!order_by)) %>%
+               arrange(MedianScore) %>%
+               select(!!group_var) %>%
+               filter(!is.na(!!group_var)) %>%
+               pull()
+       return(res)
+}
+```
+
+```{r}
+pdf(file="Figure_SX_Hallmark_Immune_Heatmap.pdf")
+hres<-hallmark_heatmap_data
+hres<-hres[,soo_order(result_table)]
+colnames(hres)<-data.frame(graph_config,row.names=graph_config$SOO_Merged)[colnames(hres),"tissue_abbreviations"]
+ha<-factor(hallmark_identification, levels=c("INTERFERON_ALPHA_RESPONSE",
+                                             "INTERFERON_GAMMA_RESPONSE",
+                                             "ALLOGRAFT_REJECTION",
+                                             "IL6_JAK_STAT3_SIGNALING",
+                                             "COMPLEMENT",
+                                             "INFLAMMATORY_RESPONSE",
+                                             "COAGULATION"))
+# This provides a semi-non linear color scheme
+hallmark_color_function<-colorRamp2(c(min(hres),-25,0,25,max(hres)),colors=c("blue","blue3","white","red1","red2"))
+h<-Heatmap(hres,
+        cluster_rows=FALSE,
+        cluster_columns=FALSE,
+        row_split = ha,
+        show_row_names=TRUE,
+        row_names_gp = gpar(fontsize=3),
+        column_names_gp = gpar(fontsize = 6),
+        row_title_rot=0,
+        row_title_gp = gpar(fontsize=6),
+        col=hallmark_color_function,
+        heatmap_legend_param = list(
+        title = "-log(p) * sign"),
+        border=TRUE
+        
+)
+draw(h)
+dev.off()
+```

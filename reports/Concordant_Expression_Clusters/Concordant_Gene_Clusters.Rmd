@@ -1,0 +1,182 @@
+---
+title: "Project RSI_Immune: Concordant Gene Clusters"
+shorttitle: "RSI_Immune"
+project: 
+srpt_number: 
+version: "`r CosmosReportTemplates::git_tag()`"
+author: 'Steven Eschrich'
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+investigators:
+  - name: "Daniel Grass"
+  - name: "Javier Torres-Roca"
+project_team:
+analysis_team:
+analysis_contact:
+organization: 
+output:
+  CosmosReportTemplates::bbsr_article_pdf: default
+  word_document: default
+  pdf_document: default
+  html_document: default
+toc: yes
+---
+
+```{r setup}
+library(knitr)
+library(ComplexHeatmap)
+library(circlize)
+library(readr)
+library(tibble)
+library(GSEABase)
+library(GSVA)
+library(dplyr)
+```
+
+
+Load the data: spreadsheet
+```{r load_data}
+soo_table<-readxl::read_excel("rsi_low_minus_high_de_probesets_2019-10-30.xlsx",
+                              sheet="6soo_no_conflict")  %>%
+  dplyr::rename(NMSC=Skin,
+                `Lung NOS`=Lung,
+                ) %>%
+  dplyr::select(-Brain, -Breast) 
+soo_subtypes<-readxl::read_excel("rsi_subcat_de_probesets_2017-04-07.xlsx",sheet="filtered")
+
+
+result_table<-readRDS(file=here::here("data.derived","result_table.RDS")) %>%
+  dplyr::filter(!is.na(SOO_Merged))
+
+graph_config<-read_excel(here::here("data.raw","Graph_Colors_Shapes.xlsx"))
+hallmark_categories<-readxl::read_excel(here::here("data.raw","Hallmark_Signature_Categories.xlsx")) %>%
+        dplyr::mutate(`Hallmark Name`=toupper(`Hallmark Name`)) %>%
+        dplyr::arrange(`Hallmark Name`)
+
+soo_abbreviations<-tibble(soo=colnames(soo_table)[19:38]) %>% 
+  
+  left_join(graph_config,by=c("soo"="SOO_Merged")) %>% 
+  mutate(merged_abbreviations=if_else(is.na(tissue_abbreviations),soo,toupper(tissue_abbreviations))) %>%
+  mutate(merged_abbreviations=toupper(merged_abbreviations)) %>%
+  pull(merged_abbreviations) 
+
+subtype_abbreviations<-tibble(soo=colnames(soo_subtypes)[18:28]) %>%
+  left_join(graph_config,by=c("soo"="SOO_Merged")) %>%
+  pull(tissue_abbreviations) 
+
+# This magic combines the soo and soo subtypes, then renames the soo by tissue abbreviations.
+full_table<-soo_table %>% 
+  dplyr::left_join(soo_subtypes,by=c("ProbeID"="ProbeID")) %>%
+  tidyr::pivot_longer(cols = graph_config$SOO_Merged)  %>%
+  dplyr::left_join(graph_config %>% dplyr::select(SOO_Merged, tissue_abbreviations),
+                   by = c("name" = "SOO_Merged")) %>%
+  dplyr::select(-name) %>%
+  tidyr::pivot_wider(names_from = "tissue_abbreviations", values_from = "value")
+  
+
+
+
+```
+
+
+Extract the relevant columns of data.
+```{r}
+hres<-soo_table %>%
+  dplyr::select(19:40)
+hres[is.na(hres)]<-0
+hres.df<-as.matrix(hres)
+colnames(hres.df)<-soo_abbreviations
+rownames(hres.df)<-soo_table$ProbeID
+
+Heatmap(hres.df, row_labels = soo_table$Symbol, 
+        cluster_rows=TRUE, 
+        cluster_columns = TRUE,
+        col=c("blue","grey","red"),
+        show_row_names=TRUE,
+        row_names_gp = gpar(fontsize = 3),
+        heatmap_legend_param = list(title = "Concordant", labels=c("Down","No Change","Up"))
+        )
+
+```
+
+Now work on subtypes.
+
+# TODO:
+This figure should the legend in the upper left corner (or centered on the left-most heatmap). If possible, align the text of the legend with the other heatmap headers.
+```{r}
+
+hres<-full_table %>%
+  dplyr::select(dplyr::all_of(graph_config$tissue_abbreviations)) %>%
+  dplyr::mutate(dplyr::across(dplyr::everything(),  ~tidyr::replace_na(.x, 0)))  %>%
+  as.matrix()
+
+soo_groupings  <- list(
+  "BLCA" = "",
+  "CESC"  = "",
+  "UCEC" = "",
+  "ESCA"= "",
+  "HNSC"= "",
+  "HGG" = "BRAIN",
+  "KIR"= "",
+  "COLON"= "",
+  "LGG" = "BRAIN",     
+  "LIVC" =  "",
+  "LUAD" =  "LUNG",
+  "LU_NOS"  = "LUNG",
+  "LUSC" = "LUNG",
+  "MELA"  =  "",
+  "NE" = "NE",
+  "NE_PANC"  = "NE",
+  "NMSC"  =  "",
+  "OVCA" =  "",
+  "BC_BASAL" =  "BREAST",
+  "BC_HER2" = "BREAST",
+  "BC_LUMA" = "BREAST",
+  "BC_LUMB"  = "BREAST",
+  "BC_NORM"  =  "BREAST",
+  "PANC"  = "",
+  "PRAD" = "",
+  "READ_AN" =  "",
+  "KIR_PEL" = "", 
+  "SARC" = "",
+  "STAD"= "",
+  "THCA" =  "",
+  "NE_LUNG" = "NE"
+)
+soo_groupings  <-  unlist(soo_groupings[colnames(hres)])
+#  hres[is.na(hres)]<-0
+#hres.df<-as.matrix(hres)
+#rownames(hres.df)<-soo_table$Symbol
+#colnames(hres.df)<-c(soo_abbreviations, subtype_abbreviations)
+#soo_groupings<-factor(c(rep("",22),c("BRAIN","BREAST","LUNG","BREAST","BREAST","LUNG","BRAIN","NE","BREAST","NE","BREAST")), levels=c("","BRAIN","BREAST","LUNG","NE"))
+pdf(file="Figure_2C_Concordant_Clusters.pdf", height = 2.72, width = 8)#height=3.3, width=3.3)
+fig2c<-Heatmap(t(hres), 
+               column_labels = full_table$ProbeID, 
+        cluster_rows=TRUE, 
+        cluster_columns = TRUE,
+        col=c("blue","grey","red"),
+        show_row_names=TRUE,
+        row_names_gp = gpar(fontsize = 4),
+        column_names_gp = gpar(fontsize = 3),
+        #column_names_rot = 45,
+        heatmap_legend_param = list(nrow=1, 
+                                    title = "Concordant:",
+                                    labels=c("Down","No Change","Up"),
+                                    labels_gp = gpar(fontsize = 6),
+                                    title_gp = gpar(fontsize = 6),
+                                    title_position = "leftcenter"),
+        #legend_gp = gpar(col = 4:5, lty = 1:2))
+        row_split=soo_groupings,
+        row_title_rot = 0,
+        cluster_row_slices = FALSE,
+        row_gap=unit(c(2,0.5,0.5,0.5),"mm"),
+        row_title_gp = gpar(fontsize=4, fontface="bold"),
+        show_column_dend=FALSE,
+        show_row_dend = FALSE,
+        #heatmap_width = unit(8, "in")
+       # height = unit(2, "in")
+        
+        )
+draw(fig2c, heatmap_legend_side = "top")
+dev.off()
+```
+

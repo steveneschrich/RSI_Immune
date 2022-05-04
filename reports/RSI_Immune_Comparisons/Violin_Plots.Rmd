@@ -1,0 +1,187 @@
+---
+title: "Project RSI_Immune: Figure_1_Violin_Plots"
+shorttitle: "RSI_Immune"
+project: 
+srpt_number: 
+version: "`r CosmosReportTemplates::git_tag()`"
+author: 'Steven Eschrich'
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+investigators:
+  - name: "Daniel Grass"
+  - name: "Javier Torres-Roca"
+project_team:
+analysis_team:
+analysis_contact:
+organization: 
+output:
+  CosmosReportTemplates::bbsr_pdf: default
+  word_document: default
+  pdf_document: default
+  html_document: default
+toc: yes
+---
+
+```{r setup}
+library(readxl)
+library(grid)
+purrr::walk(Sys.glob(file.path(here::here(), "src","*.R")), source)
+
+result.table<-readRDS(file.path(here::here(), "data.derived","result_table.RDS"))
+graph_details<-read_excel(file.path(here::here(), "data.raw","Graph_Colors_Shapes.xlsx"))
+graph_map<-graph_details$tissue_abbreviations
+names(graph_map)<-graph_details$SOO_Merged
+
+
+# Fonts are a big problem in these figures. They have to be Unicode compatible (because of the special characters)
+# and ideally multi-platform. So I'm using some google fonts, in addition to Arial Unicode. Set the font name here
+# to use throughout
+# font_name<-"Arial Unicode MS"
+setup_fonts()
+font_name<-"Noto Serif"
+  
+
+```
+
+
+Figure 1: Violin plots for RSI and Immune scores across tissues.
+
+This is done by creating each panel first, then putting them together after.
+```{r figure_2A}
+
+# Figure 2A: RSI
+
+#pdf("Figure_2A_rsi.pdf",height=8.5,width=11)
+# Current dimensions in 6/2021 ppt.
+Cairo::CairoPDF("Figure_2A_rsi.pdf", height = 4.38, width = 3.15)
+figure_2A<-dviolin_plot(data.frame(category=graph_map[result.table$SOO_Merged],
+                                    values=result.table$RSI),
+                bw="nrd0",
+                main="",
+                value_label="RSI",
+                value_limit=c(0,1),                
+                density.color.high="yellow",
+                density.color.mid="darkgreen",
+                density.color.low="blue",
+                show_n=TRUE,
+                n_prefix = "",
+                n_gp = grid::gpar(lty=0, fontsize = 7),
+                category_gp = grid::gpar(fontsize=8, lty=0)
+) 
+print(figure_2A)
+dev.off()
+```
+
+```{r figure_3A}
+# Figure 3a: Immune
+
+pdf("Figure_3A_plot.pdf",height = 4.38, width = 3.15)
+figure_3A<-dviolin_plot(data.frame(category=graph_map[result.table$SOO_Merged],
+                           values=result.table$ImmuneScore),
+                plot_vertical = FALSE,bw="nrd0",
+                main="",
+                n_prefix = "",
+                value_label="Immune Score",
+                density.color.high="yellow",
+                density.color.mid="darkgreen",
+                density.color.low="blue", 
+                n_gp = grid::gpar(lty=0, fontsize = 6),
+                category_gp = grid::gpar(fontsize=8, lty=0)
+)
+print(figure_3A)
+dev.off()
+```
+
+```{r figure_3B}
+# Figure 3B: Immune by RSI
+
+pdf("Figure_3B.pdf",height = 4.38, width = 3.15)
+figure_3B<-dviolin_plot(data.frame(category=graph_map[result.table$SOO_Merged],
+                           values=result.table$ImmuneScore,
+                           labels=factor(result.table$RSI_Category_Merged,levels=c("LOW","HI"))),
+                plot_vertical=FALSE,bw="nrd0",
+                label.color.high="#91D1C2FF",
+                label.color.low="#8491B4FF",
+                main="",
+                value_label="Immune Score",
+                color_by="label",
+                n_prefix="",
+                n_gp = grid::gpar(lty=0, fontsize = 6),
+                category_gp = grid::gpar(fontsize=8, lty=0)
+)
+# Make a legend manually, by taking it from a dummy ggplot
+tmp<-ggplot(data.frame(x=1:2,y=1:2,RSI=c("Hi","Lo")),aes(x=x,y=y,col=RSI)) + 
+  geom_point() + 
+  scale_color_manual(values=c("Hi"="#91D1C2FF","Lo"="#8491B4FF")) +
+  guides(col =
+  guide_legend(
+    title.theme = element_text(size = 6),
+    label.theme = element_text(size=6),
+    keywidth=0.5,
+    keyheight=0.5
+    ))
+    
+legend <- cowplot::get_legend(tmp)
+
+
+v<-viewport(x = 0.92, y = 0.1, 
+                      width = 0.05, height = 0.05,
+                      just = c("left", "bottom"))
+pushViewport(v)
+grid.draw(legend)
+popViewport()
+
+#print(figure_3B)
+dev.off()
+```
+
+```{r figure_1}
+pdf("Figure_1_Violin_Plot.pdf",height=8.5,width=11)
+pushViewport(viewport(layout=grid.layout(2, 3,
+                                           widths=unit(c(0.33, 0.33, 0.33), c("null", "null", "null")),
+                                           heights=unit(c(1, 1), c("null", "lines")))))
+pushViewport(viewport(layout.pos.row=1,layout.pos.col=1))
+figure_1A<-dviolin_plot(data.frame(category=graph_map[result.table$SOO_Merged],
+                                   values=result.table$RSI),
+                        bw="nrd0",
+                        main="",
+                        value_label="RSI",
+                        value_limit=c(0,1),                
+                        density.color.high="yellow",
+                        density.color.mid="darkgreen",
+                        density.color.low="blue",
+                        show_n=TRUE
+)
+grid.text(0.1,.95,label="A.",gp=gpar(fontface="bold"))
+popViewport()
+pushViewport(viewport(layout.pos.row=1, layout.pos.col=2))
+figure_1B<-dviolin_plot(data.frame(category=graph_map[result.table$SOO_Merged],
+                                   values=result.table$ImmuneScore),
+                        plot_vertical = FALSE,bw="nrd0",
+                        main="",
+                        value_label="Immune Score",
+                        density.color.high="yellow",
+                        density.color.mid="darkgreen",
+                        density.color.low="blue"
+)
+grid.text(0.1,.95,label="B.",gp=gpar(fontface="bold"))
+popViewport()
+pushViewport(viewport(layout.pos.row=1,layout.pos.col=3))
+figure_1C<-dviolin_plot(data.frame(category=graph_map[result.table$SOO_Merged],
+                        values=result.table$ImmuneScore,
+                        labels=factor(result.table$RSI_Category_Merged,levels=c("LOW","HI"))),
+             plot_vertical=FALSE,bw="nrd0",
+             
+             main="",
+             value_label="Immune Score",
+             color_by="label"
+)
+grid.text(0.1,.95,label="C.",gp=gpar(fontface="bold"))
+popViewport()
+pushViewport(viewport(layout.pos.row=2,layout.pos.col=1))
+grid.text(0.2,0.8, label="Figure 1", gp=gpar(fontface="bold"))
+popViewport()
+dev.off()
+```
+
+
+

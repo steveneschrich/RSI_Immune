@@ -1,0 +1,67 @@
+---
+title: "Project RSI_Immune: tSNE TCC Data"
+shorttitle: "RSI_Immune"
+project: 
+srpt_number: 
+version: "`r CosmosReportTemplates::git_tag()`"
+author: 'Steven Eschrich'
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+investigators:
+  - name: "Daniel Grass"
+  - name: "Javier Torres-Roca"
+project_team:
+analysis_team:
+analysis_contact:
+organization: 
+output:
+  CosmosReportTemplates::bbsr_article_pdf: default
+  word_document: default
+  pdf_document: default
+  html_document: default
+toc: yes
+---
+
+
+# Overview
+Prior to running tSNE, the data is typically reduced by PCA to fewer components and used within tsne.
+
+Since the data is large, we split up the task into first computing PCA.
+
+
+
+```{r setup}
+library(nipals)
+```
+
+Since the data is large, we first reduce the number of probesets to process by keeping only
+probesets with standard deviations > 2.
+```{r}
+tcc_primary_expression<-readRDS(file="../../data.derived/tcc-primary-expression.RDS")
+allsds<-apply(tcc_primary_expression,1,sd)
+tcc_reduced_expression<-tcc_primary_expression[which(allsds>2),]
+saveRDS(tcc_reduced_expression, file="tcc_reduced_expression.RDS")
+
+```
+
+We use the nipals algorithm to compute the first 50 components of the dataset (rather than all). NB: The signs of the scores are arbitrary, so may flip based on either the order of the samples or other conditions.
+```{r}
+
+pca<-nipals(t(tcc_reduced_expression),ncomp=50,verbose=TRUE)
+saveRDS(pca,file="tcc_primary_pca.RDS")
+```
+
+
+Then we do the tSNE clustering with the PC's are a starting point.
+```{r}
+library(Rtsne)
+ts.100<-Rtsne(pca$scores,pca=FALSE,perplexity=100)
+# Important: make sure the Y matrix is annotated as to what samples are what.
+rownames(ts.100$Y)<-rownames(pca$scores)
+#saveRDS(ts.100,file="tsne-perplexity=100-clusters.RDS")
+```
+
+
+
+```{r session.info.table,results='asis',echo=FALSE}
+CosmosReportTemplates::print_session_information()
+```

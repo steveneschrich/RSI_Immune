@@ -1,0 +1,48 @@
+---
+title: "Project RSI_Immune: RSI_Analysis"
+shorttitle: "RSI_Immune"
+project: 
+srpt_number: 
+version: "`r CosmosReportTemplates::git_tag()`"
+author: 'Steven Eschrich'
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+investigators:
+  - name: "Daniel Grass"
+  - name: "Javier Torres-Roca"
+project_team:
+analysis_team:
+analysis_contact:
+organization: 
+output:
+  CosmosReportTemplates::bbsr_article_pdf: default
+  word_document: default
+  pdf_document: default
+  html_document: default
+toc: yes
+---
+
+```{r setup}
+
+```
+
+Read in the gene expression data
+```{r}
+tcc_primary_expression<-readRDS("../../data.derived/tcc-primary-expression.RDS")
+```
+
+```{r}
+source("HuRSTAPredictor.R")
+```
+
+Run the predictor against the expression data.
+```{r}
+rsi<-predict.hursta.rsi.rank(tcc_primary_expression)
+rownames(rsi)<-rsi[,1]
+rsi<-rsi[,2,drop=F]
+```
+
+Save the result out
+```{r}
+saveRDS(rsi,file="../../data.derived/rsi.RDS")
+```
+

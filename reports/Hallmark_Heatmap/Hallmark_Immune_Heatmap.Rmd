@@ -1,0 +1,659 @@
+---
+title: "Project RSI_Immune: Hallmark_Immune_Heatmap"
+shorttitle: "RSI_Immune"
+project: 
+srpt_number: 
+version: "`r CosmosReportTemplates::git_tag()`"
+author: 'Steven Eschrich'
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+investigators:
+  - name: "Daniel Grass"
+  - name: "Javier Torres-Roca"
+project_team:
+analysis_team:
+analysis_contact:
+organization: 
+output:
+  CosmosReportTemplates::bbsr_pdf: default
+  word_document: default
+  pdf_document: default
+  html_document: default
+toc: yes
+---
+
+```{r setup}
+library(knitr)
+library(readxl)
+library(ComplexHeatmap)
+library(circlize)
+library(readr)
+library(tibble)
+library(GSEABase)
+library(GSVA)
+library(dplyr)
+library(ggpubr)
+
+# Font experiments:
+library(extrafont)
+loadfonts(device = "pdf")
+```
+
+
+Load the data: hallmarks signatures and metadata.
+```{r load_data}
+gsva_results<-readRDS("../../data.derived/gsva_results.RDS")
+
+result_table<-readRDS(file="../../data.derived/result_table_with_iRIS.RDS") %>%
+  filter(!is.na(SOO_Merged))
+graph_config<-read_excel("../../data.raw/Graph_Colors_Shapes.xlsx")
+hallmark_categories<-read_excel("../../data.raw/Hallmark_Signature_Categories.xlsx") %>%
+        mutate(`Hallmark Name`=toupper(`Hallmark Name`)) %>%
+        arrange(`Hallmark Name`)
+
+```
+
+
+Perform a little data shaping on the hallmarks.
+```{r}
+
+foo<-gsva_results %>%
+  t() %>%
+  scale() %>%
+  t() %>%
+  tibble::as_tibble(rownames="HALLMARK") %>%
+  mutate(HALLMARK = stringr::str_remove(HALLMARK, "HALLMARK_")) %>%
+  arrange(`Hallmark Name`) %>%
+  tibble::column_to_rownames(var="HALLMARK")
+
+# Scale enrichment scores about 0
+x<-t(scale(t(gsva_results)))
+# Clean up prefix of HALLMARK_
+rownames(x)<-sub("HALLMARK_","",rownames(x))
+# Create new object for the graphing, etc. Note it is ordered by hallmark_categories
+gsva_results_scaled<-x[hallmark_categories$`Hallmark Name`,]
+rm(x)
+```
+
+
+# Differences in hallmarks
+Next step is to evaluate differences in RSI Hi/Lo for signature scores.
+
+The two variables are:
+```
+pdata$RSI_Category_Merged
+pdata$SOO_Merged
+```
+
+```{r}
+# Calculate the t test p value (and statistic, lfc)
+sigs_by_soo<-list()
+for (soo in na.omit(unique(result_table$SOO_Merged)) ) {
+  soo.i<-rownames(result_table)[which(result_table$SOO_Merged==soo)]
+  sigs_by_soo[[soo]]<-apply(gsva_results_scaled, 1,
+       function(y) {
+          res<-t.test(y[soo.i]~result_table[soo.i,"RSI_Category_Merged"])
+          soo_scores<-y[soo.i]
+          soo_pdata<-result_table[soo.i,]
+          lfc<-mean(soo_scores[soo_pdata$RSI_Category_Merged=="LOW"]) - 
+                  mean(soo_scores[soo_pdata$RSI_Category_Merged=="HI"])
+          return(c(p.value=res$p.value, statistic=res$statistic, lfc=lfc))
+       })
+}
+
+gsva_results_scaled %>%
+  t() %>%
+  tibble::as_tibble(rownames = "BARCODE") %>%
+  dplyr::inner_join(result_table, by=c("BARCODE"="BARCODE")) %>%
+  dplyr::group_by(SOO_Merged) %>%
+  dplyr::summarize(
+    p.value = t.test(ADIPOGENESIS ~ RSI_Category_Merged)$p.value,
+    statistic = t.test(ADIPOGENESIS ~ RSI_Category_Merged)$statistic
+  ) %>%
+  
+result_table %>%
+  dplyr::group_by(SOO_Merged) %>%
+  dplyr::summarize(
+    ttest = t.test(? ~ RSI_Category_Merged)
+  )
+```
+
+# Create a heatmap of immune related gene sets.
+
+First, helper functions
+```{r}
+
+# This function takes the variable in order_by, calculates the group mean and returns a list of
+# groups in order_by mean value order.
+immune_score_summary<-function(p, group_var=SOO_Merged, order_by=ImmuneScore) {
+       gv <- enquo(group_var)
+       order_by <- enquo(order_by)
+       myp<-as_tibble(rownames_to_column(p)) 
+       res<-myp %>%
+               group_by( !!gv) %>%
+               summarize(MedianScore=median(!!order_by)) %>%
+               arrange(MedianScore) %>%
+               filter(!is.na(!!gv)) 
+       return(res)
+}
+
+
+
+
+
+```
+
+
+
+```{r}
+soo_order<-function(p, group_var=SOO_Merged, order_by=ImmuneScore) {
+  group_var_q <- enquo(group_var)
+  order_by_q <- enquo(order_by)
+  res<-immune_score_summary(p) %>% 
+    dplyr::select(!!group_var_q) %>%
+    pull()
+  return(res)
+}
+
+```
+
+
+```{r}
+hres<-sapply(sigs_by_soo,function(y){-log(y[1,])*sign(y[3,])})
+
+rownames(hres)<-sub("HALLMARK_","",rownames(hres))
+
+immune_hallmarks<-c(hallmark_categories %>% filter(`Process Category`=="immune") %>% pull(`Hallmark Name`))
+
+hres<-hres[immune_hallmarks,]
+rownames(hres)[6]<-"INTERFERON_ALPHA"
+rownames(hres)[7]<-"INTERFERON_GAMMA"
+hres<-hres[,soo_order(result_table, order_by=ImmuneScore)]
+colnames(hres)<-data.frame(graph_config,row.names=graph_config$SOO_Merged)[colnames(hres),"tissue_abbreviations"]
+
+median_immune_scores<-t(as.matrix(immune_score_summary(result_table, order_by=ImmuneScore)$MedianScore))
+colnames(median_immune_scores)<-colnames(hres)
+rownames(median_immune_scores)<-"Immune Score"
+
+# This provides a semi-non linear color scheme
+hallmark_color_function<-colorRamp2(c(min(hres),min(hres)/2,0,max(hres)/2,max(hres)),colors=c("blue","blue3","white","red1","red2"))
+immune_score_cor_function<-colorRamp2(c(min(median_immune_scores),max(median_immune_scores)),
+                                        colors=c(hcl.colors(3,palette="Blue-Red")[1],hcl.colors(3,palette="Blue-Red")[3]))
+
+immune_hallmark_heatmap<-
+Heatmap(hres, 
+        column_names_gp = gpar(fontsize = 9),
+        column_names_rot = 90,
+        row_names_gp = gpar(fontsize = 9),
+        column_title_rot=0,
+        column_order = 1:ncol(hres),
+        row_names_side= "left",
+        cluster_rows = TRUE,
+        show_column_dend=FALSE,
+        show_row_dend=FALSE,
+        heatmap_legend_param = list(title = "-log(p) * sign\n", 
+                                    direction="horizontal",
+                                    legend_width = unit(6,"mm"),
+                                    grid_width = unit(1, "mm"),
+                                    grid_height=unit(1,"mm"),
+                                    labels_gp = gpar(fontsize = 1),
+                                    title_gp=gpar(fontsize=1),
+                                    size=2),
+        
+        
+        col=hallmark_color_function,
+        height = unit(2, "in"),
+        show_heatmap_legend=FALSE
+   
+) %v% Heatmap(median_immune_scores,
+                         name="immune_score_indicator",
+                         cluster_rows=FALSE,
+                         cluster_columns=FALSE,
+                         show_column_names=TRUE,
+                         show_column_dend = FALSE,
+                         show_row_dend = FALSE,
+                         show_heatmap_legend = FALSE,
+                         column_names_gp=gpar(fontsize=9), #fontfamily="Arial Unicode MS",
+                         row_names_gp=gpar(fontsize=11),
+                         height=unit(.1,"in"),
+                         width=unit(1,"in"),
+                         column_labels=colnames(hres),
+                         row_names_side= "left"#,
+                         #col=immune_score_cor_function
+              )
+
+lgd <- Legend(col_fun = hallmark_color_function,
+              title = "-log(p) * sign\n", 
+                                    direction="horizontal",
+                                    legend_height = unit(.5,"in"),
+              grid_width = unit(0.5, "in"),
+                                    labels_gp = gpar(fontsize = 8),
+                                    title_gp=gpar(fontsize=10),
+                                    title_gap=unit(.005,"in")
+                                    )
+     
+cairo_pdf(file="Figure_unused_immune_hallmarks.pdf")#,height=3.5, width=1.7)
+draw(immune_hallmark_heatmap, heatmap_legend_side = "bottom", ht_gap=unit(1,"cm"))
+draw(lgd, x = unit(.15,"npc"), y = unit(0.3, "npc"))
+#draw(ht_list, ht_gap = unit(1, "cm"))
+
+dev.off()
+
+```
+
+# Components
+Next, create the hallmark immune components individually (original source is from the Hallmark_Immune_Components_Heatmap.Rmd, incorporated here to make one figure).
+
+```{r}
+all.msigdb.hallmarks<-readRDS(file="../../data.raw/msigdb.v6.1.hallmarks.rds")
+
+merck_annotation<-read_tsv(file="../../data.raw/hursta_annotation.txt")
+                             
+tcc.primary<-readRDS(file="../../data.derived/tcc-primary-expression.RDS")
+result_table<-readRDS(file="../../data.derived/result_table_with_iRIS.RDS")
+hallmark_categories<-read_excel("../../data.raw/Hallmark_Signature_Categories.xlsx") %>%
+        mutate(`Hallmark Name`=toupper(`Hallmark Name`)) %>%
+        arrange(`Hallmark Name`)
+graph_config<-read_excel("../../data.raw/Graph_Colors_Shapes.xlsx")
+```
+
+First step is to reduce the hallmarks to the immune components (categories).
+```{r}
+immune_hallmarks<-c(hallmark_categories %>% filter(`Process Category`=="immune") %>% pull(`Hallmark Name`))
+all.msigdb.hallmarks$geneset.names<-sub("^HALLMARK_","",all.msigdb.hallmarks$geneset.names)
+immune_hallmarks_i<-which(all.msigdb.hallmarks$geneset.names %in% immune_hallmarks)
+msigdb.hallmarks<-list(genesets=all.msigdb.hallmarks$genesets[immune_hallmarks_i],
+                       geneset.names=all.msigdb.hallmarks$geneset.names[immune_hallmarks_i],
+                       geneset.descriptions=all.msigdb.hallmarks$geneset.descriptions[immune_hallmarks_i]
+)
+```
+
+```{r}
+#
+# extractAndSummarizeGeneset
+# Given a gene list, extract the expression data from a large expression matrix. Then
+# summarize individual observations to by the categories (using median).
+#
+# part1: subset expression data on the basis of a gene list. This requires identifying all 
+# possible probesets, then picking the probeset with the largest median expression value.
+#
+# part2: By category, calculate the median expression value and return the summarized result.
+#
+extractAndSummarizeGeneset<-function(gene_list, exprs, annotation, categories) {
+  gene_summary_as_list<-sapply(gene_list, function(g) {
+    ps<-annotation %>% filter(Symbol==g) %>% pull(ProbeID)
+    if ( length(ps)>0) {
+      selected_ps<-ps[which.max(rowMedians(exprs[ps,,drop=F]))]
+      return(exprs[selected_ps,])
+    }
+    return(NULL)
+  },simplify=FALSE)
+  gene_summary<-do.call(rbind,gene_summary_as_list)
+  colnames(gene_summary)<-colnames(exprs)
+  rm(gene_summary_as_list)
+  
+  category_types<-na.omit(unique(categories))
+  
+  res<-sapply(category_types, function(catname) {
+    medians<-apply(gene_summary[,which(categories==catname)],1,median)
+    return(medians)
+  })
+  
+  return(res)
+}
+```
+
+
+```{r}
+
+test_rsi<-function(y, rsi_status){
+      t_result<-t.test(y~rsi_status)
+      lfc<-mean(y[rsi_status=="LOW"]) - 
+                  mean(y[rsi_status=="HI"])
+      return(-log(t_result$p.value)*sign(lfc))
+  }
+#
+# extractAndTestGeneset
+# Given a gene list, extract the expression data from a large expression matrix. Then
+# summarize individual observations by the categories through testing RSI high and low.
+#
+# part1: subset expression data on the basis of a gene list. This requires identifying all 
+# possible probesets, then picking the probeset with the largest median expression value.
+#
+# part2: By category, calculate the -log(p) * sign(diff) return the summarized result.
+#
+extractAndTestGeneset<-function(gene_list, exprs, annotation, categories) {
+  gene_summary_as_list<-sapply(gene_list, function(g) {
+    ps<-annotation %>% filter(Symbol==g) %>% pull(ProbeID)
+    if ( length(ps)>0) {
+      selected_ps<-ps[which.max(rowMedians(exprs[ps,,drop=F]))]
+      return(exprs[selected_ps,])
+    }
+    return(NULL)
+  },simplify=FALSE)
+  gene_summary<-do.call(rbind,gene_summary_as_list)
+  colnames(gene_summary)<-colnames(exprs)
+  rm(gene_summary_as_list)
+  
+  category_types<-na.omit(unique(categories))
+
+  res<-sapply(category_types, function(catname) {
+    x<-gene_summary[,which(categories==catname)]
+    rsi_status<-result_table[colnames(x),"RSI_Category_Merged"]
+    vals<-apply(x,1,function(y){ test_rsi(y,rsi_status)} )
+    return(vals)
+  })
+  
+  return(res)
+}
+```
+
+
+
+The goal of this code is to extract summary hallmark data (by tissue type) for each gene. For
+the next step (clustering) we need to also create an indicator variable of which hallmark
+each gene belongs to. We do this in a parallel array.
+```{r}
+
+
+
+hallmark_heatmap_data_as_list<-sapply(1:length(msigdb.hallmarks$geneset.names), function(i) {
+  gene_list<-msigdb.hallmarks$genesets[[i]]
+  hallmark_subset<-extractAndTestGeneset(gene_list, tcc.primary, merck_annotation, result_table$SOO_Merged)
+  return(cbind(i,hallmark_subset))
+})
+hallmark_heatmap_data<-do.call(rbind, hallmark_heatmap_data_as_list)
+
+hallmark_identification<-msigdb.hallmarks$geneset.names[hallmark_heatmap_data[,1]]
+hallmark_identification<-sub("^HALLMARK_","",hallmark_identification)
+hallmark_heatmap_data<-hallmark_heatmap_data[,2:ncol(hallmark_heatmap_data)]
+```
+Finally, we can create a heatmap with the individual genes by tissue type, separated by the
+hallmarks.
+
+
+
+
+```{r}
+
+hres<-hallmark_heatmap_data
+hres<-hres[,soo_order(result_table, order_by=ImmuneScore)]
+colnames(hres)<-data.frame(graph_config,row.names=graph_config$SOO_Merged)[colnames(hres),"tissue_abbreviations"]
+ha<-factor(hallmark_identification, levels=c("INTERFERON_ALPHA_RESPONSE",
+                                             "INTERFERON_GAMMA_RESPONSE",
+                                             "ALLOGRAFT_REJECTION",
+                                             "IL6_JAK_STAT3_SIGNALING",
+                                             "COMPLEMENT",
+                                             "INFLAMMATORY_RESPONSE",
+                                             "COAGULATION"))
+
+# This provides a semi-non linear color scheme
+hallmark_color_function<-colorRamp2(c(min(hres),-25,0,25,max(hres)),colors=c("blue","blue3","white","red1","red2"))
+
+
+median_immune_scores<-t(as.matrix(immune_score_summary(result_table, order_by=ImmuneScore)$MedianScore))
+colnames(median_immune_scores)<-colnames(hres)
+rownames(median_immune_scores)<-"Immune Score"
+
+immune_hallmark_components_heatmap<-Heatmap(hres,
+        cluster_rows=FALSE,
+        cluster_columns=FALSE,
+        show_row_dend=FALSE,
+        row_split = ha,
+        show_row_names=FALSE,
+        row_names_gp = gpar(fontsize=3),
+        column_names_gp = gpar(fontsize = 6),
+        row_title_rot=0,
+        row_title_gp = gpar(fontsize=6),
+        col=hallmark_color_function,
+        heatmap_legend_param = list(
+        title = "-log(p) * sign\n"),
+        border=TRUE
+        
+) %v% Heatmap(median_immune_scores,
+                         name="immune_score_indicator",
+                         row_title = "Immune Score",
+                         row_title_rot=0,
+                         row_title_gp=gpar(fontsize=7),
+                         cluster_rows=FALSE,
+                         cluster_columns=FALSE,
+                         show_column_names=TRUE,
+                         show_column_dend = FALSE,
+                         show_row_dend = FALSE,
+                         show_row_names = FALSE,
+                         #row_names_side="right",
+                         show_heatmap_legend = FALSE,
+                         #row_names_gp=gpar(fontsize=7), #fontfamily="Arial Unicode MS",
+                         column_names_gp=gpar(cex=0.65),
+                         height=unit(1,"mm"),
+                         column_labels=colnames(hres),
+                         col = list("Immune Score" =
+                                               colorRamp2(c(min(median_immune_scores),
+                                                        median(median_immune_scores),
+                                                        max(median_immune_scores)),
+                                                   c("#ffffff","#c2a5cf","#7b3294"))
+                                             ),
+              
+              )
+
+```
+
+# Create figure
+```{r }
+pdf(file="Figure_4A_Immune_Hallmarks_Individual_Genes.pdf")
+draw(immune_hallmark_components_heatmap)
+#figure<-grid.grabExpr(draw(immune_hallmark_components_heatmap,newpage=FALSE))
+#annotate_figure(figure, fig.lab="Extended Data Figure 7\n",fig.lab.pos = "bottom.left")
+
+dev.off()
+
+
+```
+
+# IFN, RSI and TILs
+The question came up: how does IFN, RSI and TILs relate? Presumably, we have a relationship between RSI and IFN demonstrated by the hallmarks. We have RSI and TILs (some matter, some don't). Is there a way to compare all three? It seems the better question is what TILs are associated with IFN signaling, assuming that IFN signaling occurs outside of the TILs. One way to start thinking about this is to simply characterize these three variables together in a single heatmap. It may be a lot of data, but could generate additional hypotheses.
+
+```{r}
+tils<-result_table[,grep("_NCA",colnames(result_table))]
+extractGeneset<-function(gene_list, exprs, annotation, categories) {
+  gene_summary_as_list<-sapply(gene_list, function(g) {
+    ps<-annotation %>% filter(Symbol==g) %>% pull(ProbeID)
+    if ( length(ps)>0) {
+      selected_ps<-ps[which.max(rowMedians(exprs[ps,,drop=F]))]
+      return(exprs[selected_ps,])
+    }
+    return(NULL)
+  },simplify=FALSE)
+  gene_summary<-do.call(rbind,gene_summary_as_list)
+  colnames(gene_summary)<-colnames(exprs)
+  rm(gene_summary_as_list)
+  
+  gene_summary
+}
+
+hallmark_heatmap_data_individual<-purrr::map(1:length(msigdb.hallmarks$geneset.names), function(h) {
+  gene_list<-msigdb.hallmarks$genesets[[h]]
+  hallmark_subset<-extractGeneset(gene_list, tcc.primary, merck_annotation, result_table$SOO_Merged)
+  cbind(msigdb.hallmarks$genenames[[h]], hallmark_subset)
+  #return(cbind(i,hallmark_subset))
+})
+names(hallmark_heatmap_data_individual)<-msigdb.hallmarks$geneset.names
+
+ # sapply(1:length(msigdb.hallmarks$geneset.names), function(i) {
+ # gene_list<-msigdb.hallmarks$genesets[[i]]
+ # hallmark_subset<-extractGeneset(gene_list, tcc.primary, merck_annotation, result_table$SOO_Merged)
+#  return(cbind(i,hallmark_subset))
+#})
+
+interferon_alpha<-hallmark_heatmap_data_individual$"INTERFERON_ALPHA_RESPONSE"
+
+all(rownames(tils) == colnames(interferon_alpha))
+combined_data<-rbind(t(tils), interferon_alpha)
+combined_data<-rbind(RSI=result_table[,"RSI"], t(scale(t(combined_data))))
+
+row_labels<-c("RSI",
+              rep("TIL",ncol(tils)),
+              rep("IA",nrow(interferon_alpha))
+)
+
+big_heatmap<-Heatmap(combined_data["RSI",,drop=F],
+        cluster_rows=FALSE,
+        cluster_columns=FALSE,
+        show_row_dend=FALSE,
+        show_column_dend=FALSE,
+        show_column_names=FALSE,
+        column_title = NULL,
+        column_split=result.table$SOO_Merged) %v%
+Heatmap(combined_data,
+        row_split=row_labels,
+        cluster_rows = TRUE,
+        show_row_dend = FALSE,
+        show_column_dend = FALSE,
+        show_column_names = FALSE,
+        column_split=result.table$SOO_Merged,
+        column_title = NULL,
+        cluster_column_slices=FALSE,
+        cluster_row_slices=FALSE,
+        top_annotation = columnAnnotation(SOO=result.table$SOO_Merged),
+        column_order = order(result_table$SOO_Merged),
+        row_names_gp = gpar(fontsize = 7)
+
+)
+pdf(file="../RSI_TIL_IFA/Large_Heatmap.pdf",width=11, height=8.5)
+draw(big_heatmap)
+dev.off()
+
+```
+
+
+
+
+```{r}
+tils<-result_table[,grep("_REL",colnames(result_table))]
+extractGeneset<-function(gene_list, exprs, annotation, categories) {
+  gene_summary_as_list<-sapply(gene_list, function(g) {
+    ps<-annotation %>% filter(Symbol==g) %>% pull(ProbeID)
+    if ( length(ps)>0) {
+      selected_ps<-ps[which.max(rowMedians(exprs[ps,,drop=F]))]
+      return(exprs[selected_ps,])
+    }
+    return(NULL)
+  },simplify=FALSE)
+  gene_summary<-do.call(rbind,gene_summary_as_list)
+  colnames(gene_summary)<-colnames(exprs)
+  rm(gene_summary_as_list)
+  
+  gene_summary
+}
+
+hallmark_heatmap_data_individual<-purrr::map(1:length(msigdb.hallmarks$geneset.names), function(h) {
+  gene_list<-msigdb.hallmarks$genesets[[h]]
+  hallmark_subset<-extractGeneset(gene_list, tcc.primary, merck_annotation, result_table$SOO_Merged)
+  cbind(msigdb.hallmarks$genenames[[h]], hallmark_subset)
+  #return(cbind(i,hallmark_subset))
+})
+names(hallmark_heatmap_data_individual)<-msigdb.hallmarks$geneset.names
+
+ # sapply(1:length(msigdb.hallmarks$geneset.names), function(i) {
+ # gene_list<-msigdb.hallmarks$genesets[[i]]
+ # hallmark_subset<-extractGeneset(gene_list, tcc.primary, merck_annotation, result_table$SOO_Merged)
+#  return(cbind(i,hallmark_subset))
+#})
+
+interferon_alpha<-hallmark_heatmap_data_individual$"INTERFERON_ALPHA_RESPONSE"
+
+all(rownames(tils) == colnames(interferon_alpha))
+combined_data<-rbind(t(tils), interferon_alpha)
+combined_data<-rbind(RSI=result_table[,"RSI"], t(scale(t(combined_data))))
+
+row_labels<-c("RSI",
+              rep("TIL",ncol(tils)),
+              rep("IA",nrow(interferon_alpha))
+)
+
+big_heatmap<-Heatmap(combined_data["RSI",,drop=F],
+        cluster_rows=FALSE,
+        cluster_columns=FALSE,
+        show_row_dend=FALSE,
+        show_column_dend=FALSE,
+        show_column_names=FALSE,
+        column_title = NULL,
+        column_split=result.table$SOO_Merged) %v%
+Heatmap(combined_data,
+        row_split=row_labels,
+        cluster_rows = TRUE,
+        show_row_dend = FALSE,
+        show_column_dend = FALSE,
+        show_column_names = FALSE,
+        column_split=result.table$SOO_Merged,
+        column_title = NULL,
+        cluster_column_slices=FALSE,
+        cluster_row_slices=FALSE,
+        top_annotation = columnAnnotation(SOO=result.table$SOO_Merged),
+        column_order = order(result_table$SOO_Merged),
+        row_names_gp = gpar(fontsize = 7)
+
+)
+pdf(file="../RSI_TIL_IFA/Large_Heatmap_REL.pdf",width=11, height=8.5)
+draw(big_heatmap)
+dev.off()
+
+```
+
+
+# IFN
+
+
+```{r}
+ifn_rows<-hallmark_identification %in% c("INTERFERON_ALPHA_RESPONSE")
+hres_ifn<-hres[ifn_rows,]
+hallmark_identification_ifn<-hallmark_identification[ifn_rows]
+ha<-factor(hallmark_identification_ifn, levels=c("INTERFERON_ALPHA_RESPONSE"))
+
+median_immune_scores<-t(as.matrix(immune_score_summary(result_table, order_by=ImmuneScore)$MedianScore))
+colnames(median_immune_scores)<-colnames(hres)
+rownames(median_immune_scores)<-"Immune Score"
+
+
+# This provides a semi-non linear color scheme
+hallmark_color_function<-colorRamp2(c(min(hres_ifn),-25,0,25,max(hres_ifn)),colors=c("blue","blue3","white","red1","red2"))
+immune_hallmark_IFN_heatmap<-Heatmap(hres_ifn,
+        cluster_rows=FALSE,
+        cluster_columns=FALSE,
+        row_split = ha,
+        show_row_names=TRUE,
+        row_names_gp = gpar(fontsize=4),
+        column_names_gp = gpar(fontsize = 6),
+        #row_title_rot=0,
+        row_title_gp = gpar(fontsize=6),
+        col=hallmark_color_function,
+        heatmap_legend_param = list(
+        title = "-log(p) * sign\n"),
+        border=TRUE
+        
+) %v% Heatmap(median_immune_scores,
+                         name="immune_score_indicator",
+                         cluster_rows=FALSE,
+                         cluster_columns=FALSE,
+                         show_column_names=TRUE,
+                         show_column_dend = FALSE,
+                         show_row_dend = FALSE,
+                         show_heatmap_legend = FALSE,
+                         row_names_gp=gpar(fontsize=5), #fontfamily="Arial Unicode MS",
+                         column_names_gp=gpar(cex=0.65),
+                         height=unit(1,"mm"),
+                         column_labels=colnames(hres)
+              )
+```
+
+Write out figures as specific figures in pdf format.
+```{r}
+pdf(file="Figure_6B_immune_hallmarks.pdf",height=3.5, width=1.7)
+draw(immune_hallmark_heatmap)
+dev.off()
+
+pdf(file="Figure_6C_immune_IFN_heatmap.pdf")
+draw(immune_hallmark_IFN_heatmap)
+dev.off()
+
+
+```

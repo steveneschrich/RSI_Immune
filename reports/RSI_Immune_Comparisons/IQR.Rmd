@@ -1,0 +1,49 @@
+---
+title: "Project RSI_Immune: IQR"
+shorttitle: "RSI_Immune"
+project: 
+srpt_number: 
+version: "`r CosmosReportTemplates::git_tag()`"
+author: 'Steven Eschrich'
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+investigators:
+  - name: "Daniel Grass"
+  - name: "Javier Torres-Roca"
+project_team:
+analysis_team:
+analysis_contact:
+organization: 
+output:
+  CosmosReportTemplates::bbsr_article_pdf: default
+  word_document: default
+  pdf_document: default
+  html_document: default
+toc: yes
+---
+```{r setup}
+library(readxl)
+```
+
+```{r}
+result.table<-readRDS(file="../../data.derived/result_table.RDS")
+graph_details<-read_excel("../../data.raw/Graph_Colors_Shapes.xlsx")
+graph_map<-graph_details$tissue_abbreviations
+names(graph_map)<-graph_details$SOO_Merged
+
+```
+
+To compare measures of spread, we calculate the IQR and the ratio of the upper and lower quartiles.
+```{r}
+
+boxplot.stats.soo<-boxplot(result.table$RSI~result.table$SOO_Merged)
+soo.ratio.table<-data.frame("25th Percentile"=boxplot.stats.soo$stats[2,],
+                            "75th Percentile"=boxplot.stats.soo$stats[4,],
+                            "Ratio"=boxplot.stats.soo$stats[4,]/boxplot.stats.soo$stats[2,],
+                            row.names=graph_map[boxplot.stats.soo$names],
+                            check.names=FALSE)
+write.table(soo.ratio.table,file="SOO_RSI_ratio_table.txt",quote=F,sep="\t",col.names=NA)
+```
+
+```{r session.info.table,results='asis',echo=FALSE}
+CosmosReportTemplates::print_session_information()
+```
